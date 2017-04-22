@@ -4,6 +4,7 @@ from matplotlib import pyplot as plt
 from matplotlib import collections as mc
 import uuid
 from collections import deque
+import itertools
 
 xhat = np.array([1,0,0])
 yhat = np.array([0,1,0])
@@ -125,6 +126,9 @@ class Polygon:
                 return int(np.dot(v1 - v0, ray_perp) < 0)
         return wn
 
+    def contains(self, point):
+        return self.winding_number(point) != 0
+
 class Surface:
     def __init__(self, polygons):
         self.polygons = polygons
@@ -174,13 +178,15 @@ class Voxel:
     def __init__(self, coord, scale):
         self.coord = coord
         self.scale = scale
-        self.half_scale = scale/2.0
         self.reinit()
     
-    def reinit(self)
-        self.center = coord * scale
+    def reinit(self):
+        self.half_scale = self.scale/2.0
+        self.center = self.coord * self.scale
         self.min_planes = self.center - self.half_scale
         self.max_planes = self.center + self.half_scale
+        self.planes = [self.min_planes, self.max_planes]
+        #print self.planes
 
     def in_voxel(self, point):
         """
@@ -208,11 +214,55 @@ class Voxel:
             return np.zeros(3)
 
     def next_voxel(self, ray):
-        self.coord += self.exit_plane()
+        self.coord += self.exit_plane(ray)
         self.reinit()
+
+    def ray_intersects(self, ray):
+        return np.any(self.exit_plane(ray) != np.zeros(3))
+
+    def poly_intersects(self, polygon):
+        for p in polygon.points:
+            if self.in_voxel(p):
+                #print 'in voxel'
+                return True
+        #print polygon.points
+        #print 'projection:', polygon.plane.project(self.center)
+        if not self.in_voxel(polygon.plane.project(self.center)):
+            return False
+
+        n = polygon.plane.vector
+        x0 = polygon.plane.point
+        
+        # p = v*t+p0
+        # f(x) = n*(x - x0) = 0
+        # f(v*t+p0) = n*(v*t+p0 - x0) = 0
+        # (n*v)*t + n*(p0 - x0) = 0
+        # t = n*(x0 - p0)/(n*v)
+        # pint = v*(n*(x0 - p0)/(n*v)) + p0
+        # Find the intersection of voxel edges with the plane
+        for d in [0, 1, 2]:
+            v = unit_vecs[d]
+            d0 = (d + 1) % 3
+            d1 = (d + 2) % 3
+            for dm0, dm1 in [(0,0), (0,1), (1,0), (1,1)]:
+                db0 = self.planes[dm0][d0]
+                db1 = self.planes[dm1][d1]
+                p0 = self.center.copy()
+                p0[d0] = db0
+                p0[d1] = db1
+                ndv = np.dot(n, v)
+                if ndv == 0:
+                    continue
+                pint = v*(np.dot(n, x0-p0)/np.dot(n, v)) + p0
+                #print pint
+                if np.linalg.norm(pint - p0) <= self.half_scale:
+                    if polygon.contains(pint):
+                        return True
+        return False
 
 class PolyContainer:
     def __init__(self, surfaces):
+        pass
 
 
 class GeometryNode:
@@ -227,9 +277,11 @@ class GeometryNode:
         child.parent = self
 
 class Geometry:
-    def __init__(self, root=None):
+    def __init__(self, root=None, voxel_scale=2):
         self.root = root
         self.nodes = []
+        point_dict = dict()
+        poly_nodes = []
         untraversed = deque()
         if root is not None:
             untraversed.append(root)
@@ -238,9 +290,37 @@ class Geometry:
             self.nodes.append(next_node)
             if next_node.children is not None:
                 untraversed.extend(next_node.children)
+            for poly in next_node.surface.polygons:
+                poly_node = PolyNode(poly, next_node)
+                poly_nodes.append(poly_node)
+                for p in poly.points:
+                    point_dict[repr(p)] = p
+        points = np.array([p for p in point_dict.values()])
+        min_x, max_x = min(points[:,0]), max(points[:,0])
+        min_y, max_y = min(points[:,1]), max(points[:,1])
+        min_z, max_z = min(points[:,2]), max(points[:,2])
+        min_planes = np.array([min_x, min_y, min_z])
+        max_planes = np.array([max_x, max_y, max_z])
+        min_v = np.floor(min_planes/voxel_scale)
+        max_v = np.ceil(max_planes/voxel_scale)
+        lspaces = []
+        for i in [0, 1, 2]:
+            lspaces.append((min_v[i], max_v[i], max_v[i]-min_v[i]+1))
 
-        
-
+        self.voxel_dict = dict()
+        grid = np.meshgrid(np.linspace(*lspaces[0]), np.linspace(*lspaces[1]), np.linspace(*lspaces[2]))
+        voxel_coords = (np.array([x,y,z]) for x, y, z in itertools.izip(grid[0].flatten(), grid[1].flatten(), grid[2].flatten()))
+        voxel = Voxel(np.zeros(3), voxel_scale)
+        #print lspaces
+        for vc in voxel_coords:
+            k = repr(vc)
+            self.voxel_dict[k] = []
+            voxel.coord = vc
+            voxel.reinit()
+            for pn in poly_nodes:
+                if voxel.poly_intersects(pn.poly):
+                    #print 'intersection!'
+                    self.voxel_dict[k].append(pn)
 
 r32 = np.sqrt(3.0)/2.0
 zhat= np.array([0,0,1])
@@ -260,8 +340,27 @@ sides = [[upper_hex[i], upper_hex[(i+1)%len(hex_points)], lower_hex[(i+1)%len(he
 polygons = [upper_hex] + sides
 polygons = [Polygon(Plane(*fit_plane(p)), p) for p in polygons]
 
-surface = Surface(polygons)
+#print polygons[0].points
 
+N = 10000
+surface = Surface(polygons)
+v_scale = 2.0
+v = Voxel(np.array([0, 0, 3]), v_scale)
+i = 2
+points = np.random.uniform(-v_scale*2, v_scale*2, (N, 3)) + np.array([0, 0, 3]) * v_scale
+points[:,i] = v.center[i]
+w = np.array([v.in_voxel(p) for p in points])
+
+#plt.plot(points[w,(i+1)%3], points[w,(i+2)%3], color='b', marker='.', linestyle='')
+#plt.plot(points[w == False,(i+1)%3], points[w == False,(i+2)%3], color='r', marker='.', linestyle='')
+#plt.show()
+
+
+root_node = GeometryNode(surface)
+geo = Geometry(root_node, voxel_scale=2.0)
+print len(geo.voxel_dict.values())
+print len([val for val in geo.voxel_dict.values() if len(val) > 0])
+"""
 N = 10000
 
 points = np.zeros((N, 3)) + 5
@@ -281,3 +380,4 @@ plt.plot(points[w==0,0], points[w==0,1], color='r', marker='.', linestyle='')
 upper_hex = np.array(list(upper_hex) + [list(upper_hex[0])])
 plt.plot(upper_hex[:,0], upper_hex[:,1], color='m')
 plt.show()
+"""
