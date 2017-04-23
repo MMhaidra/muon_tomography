@@ -48,8 +48,8 @@ class Plane:
         # Find the intersection of voxel edges with the plane
         n = self.vector
         x0 = self.point
-        p = ray.p
-        v = ray.v
+        v = ray.d
+        p0 = ray.p
         ndv = np.dot(n, v)
         if ndv == 0:
             return None
@@ -97,7 +97,9 @@ class Edge:
 class Ray:
     def __init__(self, p, d):
         self.p = p
-        self.d = d
+        self.d = d / np.linalg.norm(d)
+    def pca_to_point(self, point):
+        return self.p + self.d*np.dot(point - self.p, self.d)
 
 class Polygon:
     def __init__(self, plane, points, strict=True):
@@ -155,7 +157,6 @@ class Polygon:
         else:
             return None
 
-
 class Surface:
     def __init__(self, polygons):
         self.polygons = polygons
@@ -198,7 +199,8 @@ class Surface:
 
 class Voxel:
     def __init__(self, coord, scale, vol=False):
-        if vol:
+        self.vol = vol
+        if self.vol:
             self.center = coord
         else:
             self.coord = coord
@@ -206,30 +208,38 @@ class Voxel:
         if not hasattr(scale, '__len__'):
             scale = [scale, scale, scale]
         self.scale = np.array(scale)
-        self.reinit(place)
+        self.reinit()
 
     def reinit(self):
         self.half_scale = self.scale/2.0
-        if not vol:
+        if not self.vol:
             self.center = self.coord * self.scale
         self.min_planes = self.center - self.half_scale
         self.max_planes = self.center + self.half_scale
         self.planes = [self.min_planes, self.max_planes]
         #print self.planes
 
-    def contains_point(self, point):
+    def contains_point(self, point, include_boundaries=True):
         """
         Returns true if point is inside voxel or on boundary
         """
-        return np.all(point >= self.min_planes) and np.all(point <= self.max_planes)
+        if include_boundaries:
+            return np.all(point >= self.min_planes) and np.all(point <= self.max_planes)
+        else:
+            return np.all(point > self.min_planes) and np.all(point < self.max_planes)
 
     def in_voxel(self, voxel):
         corner = np.zeros(3)
+        n_inside = 0
         for i in xrange(0, 8):
             for d in [0, 1, 2]:
                 corner[d] = self.planes[i >> d & 0x1][d]
-            if voxel.contains_point(corner):
+            if voxel.contains_point(corner, include_boundaries=False):
                 return True
+            if voxel.contains_point(corner, include_boundaries=True):
+                n_inside += 1
+        if n_inside == 8:
+            return True
         return False
 
     def plane_t(self, dim, ray, invert=False):
@@ -244,7 +254,7 @@ class Voxel:
         return t
 
     def exit(self, ray, invert=False):
-        if self.contains_point(ray.p):
+        if self.contains_point(ray.p) ^ invert:
             plane_vals = [self.plane_t(dim, ray, invert) for dim in xrange(3)]
             min_val = min([val for val in plane_vals if val[0] > 0], key=lambda x: x[0])
             return (unit_vecs[min_val[2]] * (min_val[1]*2 - 1), min_val[0])
@@ -363,13 +373,7 @@ class Geometry:
 
         volume_coord = (max_v + min_v) / 2.0 * voxel_scale
         volume_scale = (max_v - min_v+1) * voxel_scale
-        self.volume = Voxel(center_coord, volume_scale, vol=True)
-
-        self.half_scale = self.scale/2.0
-        self.center = self.coord * self.scale
-        self.min_planes = self.center - self.half_scale
-        self.max_planes = self.center + self.half_scale
-        self.planes = [self.min_planes, self.max_planes]
+        self.volume = Voxel(volume_coord, volume_scale, vol=True)
 
         self.voxel_dict = dict()
         grid = np.meshgrid(np.linspace(*lspaces[0]), np.linspace(*lspaces[1]), np.linspace(*lspaces[2]))
@@ -388,8 +392,8 @@ class Geometry:
                     self.voxel_dict[k].append(pn)
 
     def get_polygon_nodes(self, voxel):
-        if voxel.scale == self.voxel_scale:
-            return self.voxel_dict[repr(voxel.coords)]
+        if np.all(voxel.scale == self.voxel_scale):
+            return self.voxel_dict[repr(voxel.coord)]
         else:
             raise ValueError("Voxel scale mismatch")
 
@@ -398,18 +402,24 @@ class Geometry:
         checked = dict()
         # Check if the ray is already in the volume
         if self.volume.contains_point(ray.p):
+            print 'Start inside the volume'
             # Find the voxel containing the ray
             voxel_coord = np.floor(ray.p/self.voxel_scale + 0.5)
             voxel = Voxel(voxel_coord, self.voxel_scale)
         else:
+            print 'Start outside the volume'
             # Find the intersection with the volume
             entry_t = self.volume.entry_t(ray)
+            print 'Entry time:', entry_t
             if entry_t is None:
+                print 'No entry point'
                 voxel = None
             else:
                 pint = ray.p+ray.d*entry_t
+                print 'Entry point:', pint
                 voxel_coord = np.floor(pint/self.voxel_scale + 0.5)
                 voxel = Voxel(voxel_coord, self.voxel_scale)
+        working_ray = Ray(ray.p.copy(), ray.d.copy())
         while voxel is not None:
             # Get the polygons that intersect with the voxel
             poly_nodes = self.get_polygon_nodes(voxel)
@@ -417,19 +427,22 @@ class Geometry:
             for poly_node in poly_nodes:
                 if poly_node.uid in checked:
                     continue
-                pint = poly_node.poly.ray_intersects(ray)
+                pint = poly_node.poly.ray_intersection(working_ray)
                 if pint is not None:
                     intersections[poly_node.uid] = (poly_node, pint)
                 checked[poly_node.uid] = poly_node
             if not all_intersections and len(intersections) > 0:
                 break
-            voxel.next_voxel(ray)
+            voxel.next_voxel(working_ray)
+            working_ray.p = ray.pca_to_point(voxel.center)
             if not voxel.in_voxel(self.volume):
                 voxel = None
 
+        intersections = [(pn, pint, np.linalg.norm(pint - ray.p)) for pn, pint in intersections.values()]
+        intersections = sorted(intersections, key=lambda x: x[2])
+        return intersections
 
-       sorted() 
-
+# Construct hexagonal prism geometry
 r32 = np.sqrt(3.0)/2.0
 zhat= np.array([0,0,1])
 hex_points = np.array([ 
@@ -448,8 +461,8 @@ sides = [[upper_hex[i], upper_hex[(i+1)%len(hex_points)], lower_hex[(i+1)%len(he
 polygons = [upper_hex] + sides
 polygons = [Polygon(Plane(*fit_plane(p)), p) for p in polygons]
 
-#print polygons[0].points
-
+# Test surface
+"""
 N = 10000
 surface = Surface(polygons)
 v_scale = 2.0
@@ -459,15 +472,23 @@ points = np.random.uniform(-v_scale*2, v_scale*2, (N, 3)) + np.array([0, 0, 3]) 
 points[:,i] = v.center[i]
 w = np.array([v.contains_point(p) for p in points])
 
-#plt.plot(points[w,(i+1)%3], points[w,(i+2)%3], color='b', marker='.', linestyle='')
-#plt.plot(points[w == False,(i+1)%3], points[w == False,(i+2)%3], color='r', marker='.', linestyle='')
-#plt.show()
+plt.plot(points[w,(i+1)%3], points[w,(i+2)%3], color='b', marker='.', linestyle='')
+plt.plot(points[w == False,(i+1)%3], points[w == False,(i+2)%3], color='r', marker='.', linestyle='')
+plt.show()
+"""
 
-
+"""
+# Test geometry
+surface = Surface(polygons)
 root_node = GeometryNode(surface)
 geo = Geometry(root_node, voxel_scale=2.0)
-print len(geo.voxel_dict.values())
-print len([val for val in geo.voxel_dict.values() if len(val) > 0])
+#print len(geo.voxel_dict.values())
+#print len([val for val in geo.voxel_dict.values() if len(val) > 0])
+ray = Ray(np.array([0, 0, -20]), np.array([0, 0, 1]))
+print geo.ray_trace(ray)
+print geo.ray_trace(ray, all_intersections=True)
+"""
+
 """
 N = 10000
 
