@@ -442,71 +442,22 @@ class Geometry:
         intersections = sorted(intersections, key=lambda x: x[2])
         return intersections
 
-# Construct hexagonal prism geometry
-r32 = np.sqrt(3.0)/2.0
-zhat= np.array([0,0,1])
-hex_points = np.array([ 
-    [1,0,0],
-    [0.5,r32,0],
-    [-0.5,r32,0],
-    [-1,0,0],
-    [-0.5,-r32,0],
-    [0.5,-r32,0],
-    ])
-r = 10
-l = 10
-upper_hex = hex_points * r + zhat*l/2
-lower_hex = hex_points * r - zhat*l/2
-sides = [[upper_hex[i], upper_hex[(i+1)%len(hex_points)], lower_hex[(i+1)%len(hex_points)], lower_hex[i]] for i in xrange(len(hex_points))]
-polygons = [upper_hex] + sides
-polygons = [Polygon(Plane(*fit_plane(p)), p) for p in polygons]
+def hex_surface(r=1., l=1.):
+    # Construct hexagonal prism geometry
+    r32 = np.sqrt(3.0)/2.0
+    hex_points = np.array([
+        [1,0,0],
+        [0.5,r32,0],
+        [-0.5,r32,0],
+        [-1,0,0],
+        [-0.5,-r32,0],
+        [0.5,-r32,0],
+        ])
+    upper_hex = hex_points * r + zhat*l/2
+    lower_hex = hex_points * r - zhat*l/2
+    sides = [[upper_hex[i], upper_hex[(i+1)%len(hex_points)], lower_hex[(i+1)%len(hex_points)], lower_hex[i]] for i in xrange(len(hex_points))]
+    polygons = [upper_hex] + sides
+    polygons = [Polygon(Plane(*fit_plane(p)), p) for p in polygons]
+    surface = Surface(polygons)
+    return surface
 
-# Test surface
-"""
-N = 10000
-surface = Surface(polygons)
-v_scale = 2.0
-v = Voxel(np.array([0, 0, 3]), v_scale)
-i = 2
-points = np.random.uniform(-v_scale*2, v_scale*2, (N, 3)) + np.array([0, 0, 3]) * v_scale
-points[:,i] = v.center[i]
-w = np.array([v.contains_point(p) for p in points])
-
-plt.plot(points[w,(i+1)%3], points[w,(i+2)%3], color='b', marker='.', linestyle='')
-plt.plot(points[w == False,(i+1)%3], points[w == False,(i+2)%3], color='r', marker='.', linestyle='')
-plt.show()
-"""
-
-"""
-# Test geometry
-surface = Surface(polygons)
-root_node = GeometryNode(surface)
-geo = Geometry(root_node, voxel_scale=2.0)
-#print len(geo.voxel_dict.values())
-#print len([val for val in geo.voxel_dict.values() if len(val) > 0])
-ray = Ray(np.array([0, 0, -20]), np.array([0, 0, 1]))
-print geo.ray_trace(ray)
-print geo.ray_trace(ray, all_intersections=True)
-"""
-
-"""
-N = 10000
-
-points = np.zeros((N, 3)) + 5
-points[:,0:2] = np.random.uniform(-10, 10, (N, 2))
-
-#points = np.array([[9,9,10]])
-
-w = []
-
-for p in points:
-    w.append(polygons[0].winding_number(np.array(p)))
-
-w = np.array(w)
-
-plt.plot(points[w!=0,0], points[w!=0,1], color='b', marker='.', linestyle='')
-plt.plot(points[w==0,0], points[w==0,1], color='r', marker='.', linestyle='')
-upper_hex = np.array(list(upper_hex) + [list(upper_hex[0])])
-plt.plot(upper_hex[:,0], upper_hex[:,1], color='m')
-plt.show()
-"""
