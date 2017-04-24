@@ -442,6 +442,39 @@ class Geometry:
         intersections = sorted(intersections, key=lambda x: x[2])
         return intersections
 
+def rotate(v, euler_angles):
+    s1, s2, s3 = np.sin(euler_angles)
+    c1, c2, c3 = np.cos(euler_angles)
+    M = [
+            [c1*c3 - c2*s1*s3,  -c1*s3-c2*c3*s1,    s1*s2   ],
+            [c3*s1+c1*c2*s3,    c1*c2*c3-s1*s3,     -c1*s2  ],
+            [s2*s3,             c3*s2,              c2      ],
+        ]
+    return np.dot(M, v)
+
+
+def regular_prism_surface(r=1., l=1., n=6, center=np.array([0,0,0]), rotation=None):
+    if rotation is None:
+        rot = lambda x, a: x
+    else:
+        rot = rotate
+    center = np.array(center)
+    rad = 2*np.pi
+    z = l/2
+    upper_points = np.zeros((n, 3))
+    lower_points = np.zeros((n, 3))
+    for i in xrange(n):
+        theta = rad * i/n
+        x = np.cos(theta) * r
+        y = np.sin(theta) * r
+        upper_points[i] = rot(np.array([x, y, z]), rotation) + center
+        lower_points[i] = rot(np.array([x, y, -z]), rotation) + center
+    sides = [[upper_points[i], upper_points[(i+1)%n], lower_points[(i+1)%n], lower_points[i]] for i in xrange(n)]
+    polygons = [upper_points, lower_points] + sides
+    polygons = [Polygon(Plane(*fit_plane(p)), p) for p in polygons]
+    surface = Surface(polygons)
+    return surface
+
 def hex_surface(r=1., l=1.):
     # Construct hexagonal prism geometry
     r32 = np.sqrt(3.0)/2.0
