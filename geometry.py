@@ -397,6 +397,15 @@ class Geometry:
         else:
             raise ValueError("Voxel scale mismatch")
 
+    def get_containing_voxel(self, point):
+        voxel_coord = np.floor(point/self.voxel_scale + 0.5)
+        return voxel_coord
+
+    def get_t_until_next_voxel(self, ray):
+        current_voxel = get_containing_voxel(ray.p)
+        voxel = Voxel(current_voxel, self.voxel_scale)
+        return voxel.exit_t(ray)
+
     def ray_trace(self, ray, all_intersections=False):
         intersections = dict()
         checked = dict()
