@@ -72,22 +72,53 @@ def mu_soft(mu_soft_mean, alpha):
     else:
         return 1-comp*((1-xi)/mu_soft_mean)**alpha
 
+class Track:
+    def __init__(self, position, direction, mass, energy, geometry):
+        self.ray = geo.Ray(position, direction)
+        self.mass = mass
+        self.energy = energy
+        self.geo_node = None
+        self.geometry = geometry
+        self.update()
+    def update(self, intersections=None):
+        self.geo_node, self.intersections = self.geometry.get_containing_surface(self.ray, intersections, return_intersections=True)
+        if intersections is not None and len(intersections) > 0 and self.intersections[0][2] < 1e-6:
+            self.ray.p = self.ray.p + self.ray.v + (self.intersections[0][2]+1e-9)
+            self.update(intersections=self.intersections[1:])
+    def get_material_properties(self):
+        if self.geo_node is None:
+            props = self.geometry.default_properties
+        else:
+            props = self.geo_node.properties
+        return props
+
 class Propagator:
-    def __init__(self):
+    def __init__(self, track):
+        self.track = track
+        self.mass = track.mass
+        self.energy = track.energy
+        self.Z = 0
+        self.N = 0
         self.Cs = 0.05
+        self.update_model()
         pass
 
-    def propagate_step(self, track, geometry):
-        self.Z, self.N = get_material_properties(track, geometry) # needs to be implemented
-        # 1: set the initial position and direction of the particle
-        p0 = track.ray.p.copy()
-        v0 = track.ray.v.copy()
+    def update_model(self, material_update=True, energy_update=True):
+        # Prerequisite to step 2: compute lambdah
+        update = not (material_update or energy_update)
+        if energy_update and 1-self.track.energy/self.energy >= 0.01:
+            update = True
+        props = self.track.get_material_properties()
+        if material_update and (self.N != props['N'] or self.Z != props['Z']):
+            update = True
 
-        # prereq 2: compute lambdah
-        self.energy = track.energy
-        self.mass = track.mass
+        if not update:
+            return
+
+        self.energy = self.track.energy
         self.gamma = gamma(self.energy, self.mass)
         self.beta = beta(self.gamma)
+        self.Z, self.N = props['Z'], props['N']
         self.A = screening_parameter(self.mass, self.gamma, self.beta, self.Z)
         self.G1W = G1W(self.A)
         self.G2W = G2W(self.A)
@@ -97,6 +128,19 @@ class Propagator:
         self.lambda2W = lambda2W(self.lambdaW, self.G2W)
         self.lambdah = lambdah(self.lambdaW, self.Cs, self.lambda1W)
         self.mu_cut = mu_cut(self.A, self.lambdah, self.lambdaW)
+ 
+        # Prerequisite to step 5: compute soft lambdas
+        self.lambda1Ws = lambda1Ws(self.A, self.lambdaW, self.mu_cut)
+        self.lambda2Ws = lambda2Ws(self.A, self.lambdaW, self.mu_cut)
+
+    def propagate_step(self):
+        # 1: set the initial position and direction of the particle
+        p0 = self.track.ray.p.copy()
+        v0 = self.track.ray.v.copy()
+
+        # Update the MSC model quantities is the energy has changed by 1% or more
+        if 1-self.track.energy/self.energy >= 0.01:
+            self.update_model(material_update=False, energy_update=True)
 
         # 2: sample the length t of the step for the hard scatter using t=-lambdah*ln(xi)
         xi = np.random.random()
@@ -106,21 +150,20 @@ class Propagator:
         xi = np.random.random()
         self.tau = self.t*xi
         p1 = p0 + v0*self.tau
-        track.ray.p = p1
 
         # 4: check if the track has crossed an interface
         intersections = geometry.ray_trace(ray, all_intersections=False)
         crossed = False
         if len(intersections) > 0:
             geo_lim = intersections[0][2]
-            if geo_lim <= self.tau:
-                track.ray.p = p0 + v0*geo_lim
-                return track
+            if geo_lim <= self.tau and geo_lim > 1e-9:
+                # If the track crosses an interface, stop it at the interface
+                self.track.ray.p = p0 + v0*geo_lim
+                self.track.update()
+                self.update_model(material_update=True, energy_update=False)
+                return
+        self.track.ray.p = p1
 
-        # prereq 5
-        self.lambda1Ws = lambda1Ws(self.A, self.lambdaW, self.mu_cut)
-        self.lambda2Ws = lambda2Ws(self.A, self.lambdaW, self.mu_cut)
-        
         # 5: simulate the soft scattering
         self.mu_soft_mean = mu_soft_mean(self.t, self.lambda1Ws)
         self.mu2_soft_mean = mu2_soft_mean(self.t, self.mu_soft_mean, self.lambda2Ws)
@@ -140,21 +183,24 @@ class Propagator:
         # Step1: project onto new coordinate system
         # Step2: perform rotation
         # Step3: project back onto original coordinate system
-        v1 = None
-        track.ray.v = v1
+        v1 = geo.deflect_vector(v0, self.theta_soft, self.phi_soft)
+        self.track.ray.v = v1
 
         # 6: advance the particle by t-tau
         p2 = p1 + v1*(self.t - self.tau)
-        track.ray.p = p2
         
         # 7: check if the track has crossed an interface
-        intersections = geometry.ray_trace(track.ray, all_intersections=False)
+        intersections = geometry.ray_trace(self.track.ray, all_intersections=False)
         crossed = False
         if len(intersections) > 0:
             geo_lim = intersections[0][2]
-            if geo_lim <= (self.t - self.tau):
-                track.ray.p = p1 + v1*geo_lim
-                return track
+            if geo_lim <= (self.t - self.tau) and geo_lim > 1e-9:
+                # If the track crosses an interface, stop it at the interface
+                self.track.ray.p = p1 + v1*geo_lim
+                self.track.update()
+                self.update_model(material_update=True, energy_update=False)
+                return
+        self.track.ray.p = p2
 
         # 8: simulate a hard scatter
         self.mu_hard = mu_hard(self.A, self.mu_cut)
@@ -163,8 +209,5 @@ class Propagator:
         self.phi_hard = 2*np.pi*xi
 
         # Change the direction of the vector
-        # Still need to implement
-        v2 = None
-        track.ray.v = v2
-        
-        return track
+        v2 = geo.deflect_vector(v1, self.theta_hard, self.phi_hard)
+        self.track.ray.v = v2
