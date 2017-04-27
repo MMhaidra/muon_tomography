@@ -5,24 +5,27 @@ from matplotlib import collections as mc
 import uuid
 from collections import deque
 import itertools
+import materials
 
 xhat = np.array([1,0,0])
 yhat = np.array([0,1,0])
 zhat = np.array([0,0,1])
 unit_vecs = np.array([xhat, yhat, zhat])
 
+def get_local_plane_coordinate_system(vector):
+    min_index = min(enumerate(vector), key=lambda x: x[1])[0]
+    y_dir = unit_vecs[min_index] - vector*np.dot(unit_vecs[min_index], vector)
+    y_dir = y_dir / np.linalg.norm(y_dir)
+    x_dir = np.cross(y_dir, vector)
+    x_dir = x_dir / np.linalg.norm(x_dir)
+    local_unit_vecs = np.array([x_dir, y_dir, vector])
+    return local_unit_vecs
+
 class Plane:
     def __init__(self, point, vector):
         self.point = point
         self.vector = vector / np.linalg.norm(vector)
-
-        min_index = min(enumerate(self.vector), key=lambda x: x[1])[0]
-        y_dir = unit_vecs[min_index] - self.vector*np.dot(unit_vecs[min_index], self.vector)
-        y_dir = y_dir / np.linalg.norm(y_dir)
-        x_dir = np.cross(y_dir, self.vector)
-        x_dir = x_dir / np.linalg.norm(x_dir)
-
-        self.unit_vecs = np.array([x_dir, y_dir, self.vector])
+        self.unit_vecs = get_local_plane_coordinate_system(self.vector)
 
     def __eq__(self, other):
         if (self.point != other.point).any():
@@ -245,7 +248,9 @@ class Voxel:
     def plane_t(self, dim, ray, invert=False):
         p = ray.p
         d = ray.d
-        if (d[dim] > 0) ^ invert:
+        if d[dim] == 0:
+            t = (np.inf, None)
+        elif (d[dim] > 0) ^ invert:
             t = ((self.max_planes[dim] - p[dim])/d[dim], 1, dim)
         elif (d[dim] < 0) ^ invert:
             t = ((self.min_planes[dim] - p[dim])/d[dim], 0, dim)
@@ -324,9 +329,9 @@ class Voxel:
         return False
 
 class PolyNode:
-    def __init__(self, poly, surface):
+    def __init__(self, poly, geo_node):
         self.poly = poly
-        self.surface = surface
+        self.geo_node = geo_node
         self.uid = uuid.uuid4()
 
 class GeometryNode:
@@ -335,24 +340,27 @@ class GeometryNode:
         self.properties = properties
         self.uid = uuid.uuid4()
         self.parent = parent
+        self.level = 0
         self.children = children
     def add_child(self, child):
         self.children.append(child)
         child.parent = self
 
 class Geometry:
-    def __init__(self, root=None, voxel_scale=2):
-        self.root = root
+    def __init__(self, root_nodes, voxel_scale=2, default_properties=materials.get_properties(7)):
+        self.root_nodes = root_nodes
+        self.default_properties = default_properties
         self.nodes = []
         point_dict = dict()
         poly_nodes = []
         untraversed = deque()
-        if root is not None:
-            untraversed.append(root)
+        untraversed.extend(root_nodes)
         while len(untraversed) > 0:
             next_node = untraversed.popleft()
             self.nodes.append(next_node)
             if next_node.children is not None:
+                for child in next_node.children:
+                    child.level = next_node.level + 1
                 untraversed.extend(next_node.children)
             for poly in next_node.surface.polygons:
                 poly_node = PolyNode(poly, next_node)
@@ -411,21 +419,21 @@ class Geometry:
         checked = dict()
         # Check if the ray is already in the volume
         if self.volume.contains_point(ray.p):
-            print 'Start inside the volume'
+            #print 'Start inside the volume'
             # Find the voxel containing the ray
             voxel_coord = np.floor(ray.p/self.voxel_scale + 0.5)
             voxel = Voxel(voxel_coord, self.voxel_scale)
         else:
-            print 'Start outside the volume'
+            #print 'Start outside the volume'
             # Find the intersection with the volume
             entry_t = self.volume.entry_t(ray)
-            print 'Entry time:', entry_t
+            #print 'Entry time:', entry_t
             if entry_t is None:
-                print 'No entry point'
+                #print 'No entry point'
                 voxel = None
             else:
                 pint = ray.p+ray.d*entry_t
-                print 'Entry point:', pint
+                #print 'Entry point:', pint
                 voxel_coord = np.floor(pint/self.voxel_scale + 0.5)
                 voxel = Voxel(voxel_coord, self.voxel_scale)
         working_ray = Ray(ray.p.copy(), ray.d.copy())
@@ -451,6 +459,44 @@ class Geometry:
         intersections = sorted(intersections, key=lambda x: x[2])
         return intersections
 
+    def get_containing_surface(self, ray, intersections=None, return_intersections=False):
+        if intersections is None:
+            intersections = self.ray_trace(ray, all_intersections=True)
+        n = len(intersections)
+        if not self.volume.contains_point(ray.p) or n == 0:
+            if return_intersections:
+                return None, intersections
+            else:
+                return None
+        last = -1
+        geo_nodes = [None]
+        current = -1
+        for i in xrange(n):
+            i = n-1 - i
+            node = intersections[i][0].geo_node
+            next_l = node.level
+            mod = False
+            if next_l > last:
+                current += 1
+                geo_nodes.append(node)
+                mod = False
+            elif next == last:
+                if mod:
+                    current += 1
+                    geo_nodes.append(node)
+                else:
+                    current -= 1
+                    geo_nodes.pop()
+                mod = not mod
+            else:
+                current -= 1
+                geo_nodes.pop()
+                mod = False
+        if return_intersections:
+            return geo_nodes[-1], intersections
+        else:
+            return geo_nodes[-1]
+
 def rotate(v, euler_angles):
     s1, s2, s3 = np.sin(euler_angles)
     c1, c2, c3 = np.cos(euler_angles)
@@ -461,6 +507,12 @@ def rotate(v, euler_angles):
         ]
     return np.dot(M, v)
 
+def deflect_vector(v, theta, phi):
+    unit_vecs = get_local_plane_coordinate_system(v)
+    local_vector = np.dot(unit_vecs, v)
+    local_vector = rotate(local_vector, np.array([phi, theta, 0]))
+    v1 = np.dot(unit_vecs.T, local_vector)
+    return v1
 
 def regular_prism_surface(r=1., l=1., n=6, center=np.array([0,0,0]), rotation=None):
     if rotation is None:
