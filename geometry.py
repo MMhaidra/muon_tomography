@@ -455,7 +455,7 @@ class Geometry:
         return voxel_coord
 
     def get_t_until_next_voxel(self, ray):
-        current_voxel = get_containing_voxel(ray.p)
+        current_voxel = self.get_containing_voxel(ray.p)
         voxel = Voxel(current_voxel, self.voxel_scale)
         return voxel.exit_t(ray)
 
@@ -548,7 +548,7 @@ class Geometry:
                 current += 1
                 geo_nodes.append(node)
                 mod = False
-            elif next == last:
+            elif next_l == last:
                 if mod:
                     current += 1
                     geo_nodes.append(node)

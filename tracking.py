@@ -102,6 +102,7 @@ class Propagator:
         self.N = 0
         self.Cs = 1
         self.update_model()
+        self.log = []
         pass
 
     def update_model(self, material_update=True, energy_update=True):
@@ -168,6 +169,8 @@ class Propagator:
                 #print 'Hit the geometric limit before soft scatter', geo_lim, self.tau
                 # If the track crosses an interface, stop it at the interface
                 self.track.ray.p = p0 + v0*geo_lim
+                if 'det' in intersections[0][0].geo_node.properties:
+                    self.log.append((self.track.energy, self.track.ray.p, self.track.ray.d, intersections[0][0].geo_node.properties['det']))
                 self.track.update()
                 self.update_model(material_update=True, energy_update=False)
                 return not ((self.track.geo_node is None or self.track.geo_node.level >= -1) and len(self.track.intersections) == 0)
@@ -208,6 +211,8 @@ class Propagator:
                 # If the track crosses an interface, stop it at the interface
                 #print 'Moving track to boundary before hard scatter'
                 self.track.ray.p = p1 + v1*geo_lim
+                if 'det' in intersections[0][0].geo_node.properties:
+                    self.log.append((self.track.energy, self.track.ray.p, self.track.ray.d, intersections[0][0].geo_node.properties['det']))
                 #print 'Updating track'
                 self.track.update()
                 #print 'Updating model'
