@@ -125,6 +125,7 @@ def run():
         pickle.dump(logs, f)
         f.close()
         del logs
+        i = i + 1
 
 #test_surface()
 #test_geo()
