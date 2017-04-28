@@ -36,13 +36,22 @@ def test_propagation():
     root_node = geo.GeometryNode(surface)
     root_node.properties = materials.get_properties(92)
     g = geo.Geometry([root_node], voxel_scale=2.0)
-    position, direction = (np.array([0, 0, -20]), np.array([0, 0, 1]))
+    position = np.random.uniform(size=3)
+    direction = -position / np.linalg.norm(position)
+    position *= 2
+    #print position, direction
+    #position, direction = (np.array([0, 0, -20]), np.array([0, 0, 1]))
     mass = tracking.muon_mass
     energy = 1
     track = tracking.Track(position, direction, mass, energy, g)
-    prop = tracking.Propagator(track)
+    #print track.ray.p, track.ray.d
 
-
+    while True:
+        prop = tracking.Propagator(track)
+        result = prop.propagate_step()
+        #print track.ray.p, track.ray.d
+        if not track.geometry.volume.contains_point(track.ray.p) or not result:
+            break
 
 #test_surface()
 #test_geo()
