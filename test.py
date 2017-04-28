@@ -112,7 +112,6 @@ def test_detection(n = 1):
                 ul = min(upper_l, key=lambda x: np.linalg.norm(x[1]))
                 ll = min(lower_l, key=lambda x: np.linalg.norm(x[1]))
                 log = [[ul[0], ul[1], ul[2]], [ll[0], ll[1], ll[2]]]
-                print log
                 logs.append(log)
     return logs
 
@@ -121,6 +120,7 @@ def run():
     i = 0
     while True:
         logs = test_detection(100000)
+        print 'Done with', i
         f = open(uid+'_'+str(i)+'.pkl', 'wb')
         pickle.dump(logs, f)
         f.close()
