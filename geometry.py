@@ -516,7 +516,7 @@ class Geometry:
                 checked[poly_node.uid] = poly_node
             if not all_intersections and len(intersections) > 0:
                 break
-            voxel.next_voxel(ray)
+            voxel.next_voxel(working_ray)
             exit_plane, exit_t = voxel.exit(working_ray)
             working_ray.p = working_ray.p + working_ray.d*exit_t
             if (not self.volume.contains_point(working_ray.p)) or repr(voxel.coord) not in self.voxel_dict:
@@ -585,6 +585,13 @@ def deflect_vector(v, theta, phi):
     v1 = np.dot(unit_vecs.T, local_vector)
     v1 = v1 / np.linalg.norm(v1)
     return v1
+
+def get_projected_angles(v0, v1):
+    unit_vecs = get_local_plane_coordinate_system(v0)
+    local_vector = np.dot(unit_vecs, v1)
+    thetax = np.arcsin(local_vector[0]/np.sqrt(local_vector[0]**2+local_vector[2]**2))
+    thetay = np.arcsin(local_vector[1]/np.sqrt(local_vector[1]**2+local_vector[2]**2))
+    return thetax, thetay
 
 def regular_prism_surface(r=1., l=1., n=6, center=np.array([0,0,0]), rotation=None):
     if rotation is None:
