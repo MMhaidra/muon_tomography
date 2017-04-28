@@ -7,12 +7,18 @@ from collections import deque
 import itertools
 import materials
 
+# Define global coordinate system unit vectors
 xhat = np.array([1,0,0])
 yhat = np.array([0,1,0])
 zhat = np.array([0,0,1])
 unit_vecs = np.array([xhat, yhat, zhat])
 
 def get_local_plane_coordinate_system(vector):
+    """
+    Define a coordinate system with the z-axis oriented in the direction of the normal vector,
+    and x,y oriented on the orthogonal plane.
+    The x and y directions are assigned in a deterministic way.
+    """
     min_index = min(enumerate(vector), key=lambda x: abs(x[1]))[0]
     y_dir = unit_vecs[min_index] - vector*np.dot(unit_vecs[min_index], vector)
     y_dir = y_dir / np.linalg.norm(y_dir)
@@ -22,6 +28,9 @@ def get_local_plane_coordinate_system(vector):
     return local_unit_vecs
 
 class Plane:
+    """
+    Class representing a Euclidean plane
+    """
     def __init__(self, point, vector):
         self.point = point
         self.vector = vector / np.linalg.norm(vector)
@@ -35,13 +44,22 @@ class Plane:
         return True
 
     def distance(self, p):
+        """
+        Compute the distance beteen a point and the plane
+        """
         t = np.dot(self.vector, (self.point - p))
         return t
 
     def project(self, p):
+        """
+        Project a point onto the plane
+        """
         return p + self.vector * self.distance(p)
 
     def ray_intersection(self, ray):
+        """
+        Compute the intersection point of a ray with the plane
+        """
         # p = v*t+p0
         # f(x) = n*(x - x0) = 0
         # f(v*t+p0) = n*(v*t+p0 - x0) = 0
@@ -59,6 +77,9 @@ class Plane:
         return v*(np.dot(n, x0-p0)/ndv) + p0
 
 def fit_plane(points):
+    """
+    Compute the best fit plane to a set of pointd in 3D
+    """
     center = sum(points) / len(points)
     x = np.array(points - center)
     M = np.dot(np.transpose(x),x)
@@ -77,6 +98,9 @@ def is_left(p0, p1, p2, normal=None):
     return np.dot(np.cross(p1 - p0, p2 - p1), normal)
 
 class Edge:
+    """
+    Class representing the edge of a polygon
+    """
     def __init__(self, p0, p1):
         p0 = list(p0)
         p1 = list(p1)
@@ -98,17 +122,27 @@ class Edge:
         return hash(repr(self.p0) + repr(self.p1))
 
 class Ray:
+    """
+    Class representing a ray
+    """
     def __init__(self, p, d):
         self.p = p
         self.d = d / np.linalg.norm(d)
     def pca_to_point(self, point):
+        """
+        Compute the ray's closest approach to a point
+        """
         return self.p + self.d*np.dot(point - self.p, self.d)
 
 class Polygon:
+    """
+    Class representing a polygon
+    """
     def __init__(self, plane, points, strict=True):
         self.plane = plane
         self.points = points
         self.edges = []
+        # Check that the points lie on the plane to within some tolerance
         for i, p in enumerate(self.points):
             t = self.plane.distance(p)
             if abs(t) >= 1e-5:
@@ -123,6 +157,12 @@ class Polygon:
         return self.edges
 
     def winding_number(self, point):
+        """
+        Compute the winding number of a point with respect to the polygon
+        The winding number is representative of the number of times the polygon edge wraps
+            counterclockwise around a point
+        Can be used to check if a point is contained in a polygon
+        """
         point = point - self.plane.point
         ray = self.plane.unit_vecs[0]
         ray_perp = self.plane.unit_vecs[1]
@@ -151,9 +191,16 @@ class Polygon:
         return wn
 
     def contains(self, point):
+        """
+        Compute whether a point is inside a polygon or not
+        A non zero winding number implies that the point is contained
+        """
         return self.winding_number(point) != 0
 
     def ray_intersection(self, ray):
+        """
+        Compute the intersection of a ray with the polygon if it exists
+        """
         pint = self.plane.ray_intersection(ray)
         if pint is not None and self.contains(pint):
             return pint
@@ -161,12 +208,16 @@ class Polygon:
             return None
 
 class Surface:
+    """
+    Class representing a surface
+    """
     def __init__(self, polygons):
         self.polygons = polygons
         raw_edges = [e for p in self.polygons for e in p.get_edges()]
         edge_counts = Counter(raw_edges)
         naked_edges = []
         point_dict = dict()
+        # Check that each edge is shared by only two polygons
         for e, c in edge_counts.items():
             if c == 1:
                 for p in e.points():
@@ -176,7 +227,11 @@ class Surface:
                 naked_edges.append(e)
             elif c > 2:
                 raise ValueError('Edge shared by too many polygons')
+        # If some edges are not shared by more than one polygon
+        # the surface is considered to be open.
+        # Attempt to construct a single polygon to close the surface.
         if len(naked_edges) > 0:
+            # Require that each point belongs to two lines
             for p, edges in point_dict.items():
                 if len(edges) != 2:
                     raise ValueError('Polygon not well connected')
@@ -184,6 +239,7 @@ class Surface:
             last_point = last_edge.points()[0]
             ordered_edges = [last_edge]
             ordered_points = [last_point]
+            # Sort the edges end to end
             while True:
                 last_edge = ordered_edges[-1]
                 last_point = ordered_points[-1]
@@ -194,6 +250,7 @@ class Surface:
                 if (new_point == ordered_points[0]).all():
                     break
                 ordered_points.append(new_point)
+            # Construct and add te new polygon
             center = sum(ordered_points) / len(ordered_points)
             normal = np.linalg.svd(np.transpose(np.array(ordered_points - center)))[0][-1]
             new_plane = Plane(center, normal)
@@ -201,19 +258,27 @@ class Surface:
             self.polygons.append(new_polygon)
 
 class Voxel:
+    """
+    Class representing a voxel
+    """
     def __init__(self, coord, scale, vol=False):
+        # The vol specifies that the voxel is not a part of a grid of voxels
         self.vol = vol
         if self.vol:
             self.center = coord
         else:
             self.coord = coord
 
+        # Set the size of the voxel
         if not hasattr(scale, '__len__'):
             scale = [scale, scale, scale]
         self.scale = np.array(scale)
         self.reinit()
 
     def reinit(self):
+        """
+        Re-initializes relevant quantities after the voxel coordinates/scale have been changed
+        """
         self.half_scale = self.scale/2.0
         if not self.vol:
             self.center = self.coord * self.scale
@@ -231,6 +296,11 @@ class Voxel:
             return np.all(point > self.min_planes) and np.all(point < self.max_planes)
 
     def get_corners(self):
+        """
+        Return the coordinates of the voxel coorners
+        """
+        # I'm pretty sure this doesn't work because of some bit shifting nastiness
+        # Caused infinite loops when I tries to use the ouput
         corners = []
         for i in xrange(0, 8):
             corner = np.zeros(3)
@@ -240,6 +310,9 @@ class Voxel:
         return corners
 
     def get_faces(self):
+        """
+        Return polygon objects that represent the rectangular faces of the voxel
+        """
         faces = []
         for d in xrange(3):
             for m in [0, 1]:
@@ -263,6 +336,9 @@ class Voxel:
         return faces
 
     def in_voxel(self, voxel, count_edge_contact=False):
+        """
+        Check if this voxel is inside another voxel
+        """
         corner = np.zeros(3)
         n_inside = 0
         for corner in self.get_corners():
@@ -276,6 +352,11 @@ class Voxel:
         return False
 
     def plane_t(self, dim, ray, minmax=0):
+        """
+        Compute the distance between a ray and one of the six planes
+        dim: specifies the dimension of the plane's normal vector
+        minmax: specifies whether it is the minimum or maximum plane in that dimension
+        """
         p = ray.p
         d = ray.d
         if (d[dim] == 0):
@@ -287,6 +368,9 @@ class Voxel:
         return t
 
     def exit(self, ray):
+        """
+        Compute the distance to a ray's exit from the voxel and the plane through which it will exit
+        """
         t_infos = []
         for d in xrange(3):
             t0 = self.plane_t(d, ray, minmax=0)
@@ -297,6 +381,9 @@ class Voxel:
         return (unit_vecs[d] * (minmax*2 - 1), t)
 
     def entry(self, ray):
+        """
+        Compute the distance to a ray's entry to the voxel and the plane through which it will enter
+        """
         t_infos = []
         for d in xrange(3):
             t0 = self.plane_t(d, ray, minmax=0)
@@ -319,19 +406,32 @@ class Voxel:
         return self.entry(ray)[1]
 
     def next_voxel(self, ray):
+        """
+        Re-initialize voxel as the next voxel a ray will pass through
+        """
         plane = self.exit_plane(ray)
         self.coord += plane
         self.reinit()
 
     def ray_intersects(self, ray):
+        """
+        Check if a ray intersects the voxel
+        """
         t = self.entry_t(ray)
         p = ray.p + ray.d*t
         return self.contains_point(p, include_boundaries=True, tol=1e-6)
 
     def poly_intersects(self, polygon):
+        """
+        Check if a polygon intersects with the voxel
+        """
+        # Return True is any polygon points are in the voxel
         for p in polygon.points:
             if self.contains_point(p):
                 return True
+
+        # If the projection of the voxel center onto the plane of the polygon is not inside the voxel,
+        # then no point on the polygon is inside the voxel
         if not self.contains_point(polygon.plane.project(self.center)):
             return False
 
@@ -345,32 +445,40 @@ class Voxel:
         # t = n*(x0 - p0)/(n*v)
         # pint = v*(n*(x0 - p0)/(n*v)) + p0
         # Find the intersection of voxel edges with the plane
-        for d in [0, 1, 2]:
+        for d in [0, 1, 2]: # d = unit direction of edge
             v = unit_vecs[d]
-            d0 = (d + 1) % 3
-            d1 = (d + 2) % 3
+            d0 = (d + 1) % 3 # other dimention 0
+            d1 = (d + 2) % 3 # other dimension 1
             for dm0, dm1 in [(0,0), (0,1), (1,0), (1,1)]:
-                db0 = self.planes[dm0][d0]
-                db1 = self.planes[dm1][d1]
-                p0 = self.center.copy()
+                db0 = self.planes[dm0][d0] # coordinate 0 of edge
+                db1 = self.planes[dm1][d1] # coordinate 1 of edge
+                p0 = self.center.copy() # Point on edge
                 p0[d0] = db0
                 p0[d1] = db1
                 ndv = np.dot(n, v)
-                if ndv == 0:
+                if ndv == 0: # Don't want to divide by zero
                     continue
-                pint = v*(np.dot(n, x0-p0)/np.dot(n, v)) + p0
-                if np.linalg.norm(pint - p0) <= self.half_scale[d]:
-                    if polygon.contains(pint):
+                pint = v*(np.dot(n, x0-p0)/np.dot(n, v)) + p0 # compute the intersection point
+                if np.linalg.norm(pint - p0) <= self.half_scale[d]: # check if the point is in the voxel
+                    if polygon.contains(pint): # check if the point is in the polygon
                         return True
         return False
 
 class PolyNode:
+    """
+    Class to store information about a polygon,
+    and the surface it belongs to in the spacial data structure
+    """
     def __init__(self, poly, geo_node):
         self.poly = poly
         self.geo_node = geo_node
         self.uid = uuid.uuid4()
 
 class GeometryNode:
+    """
+    Class for hierarchically organizing surfaces in the geomtry
+    as well as specifying the properties of the volume within that surface
+    """
     def __init__(self, surface, properties=None, parent=None, children=[]):
         self.surface = surface
         self.properties = properties
@@ -383,11 +491,19 @@ class GeometryNode:
         child.parent = self
 
 class Geometry:
+    """
+    Class representing the geometry of the simulation environment
+    Organizes polygons of surfaces into spacial data structure for fast ray tracing
+    Performs ray tracing
+    Determines where points in the volume are (what voxel, what surface)
+    """
     def __init__(self, root_nodes, voxel_scale=2, default_properties=materials.get_properties(7)):
         self.root_nodes = root_nodes
-        self.default_properties = default_properties
+        self.default_properties = default_properties # default properties are those of nitrogen
         self.default_properties['root'] = True
         self.nodes = []
+
+        # Traverse geometry nodes to collect polygons
         point_dict = dict()
         poly_nodes = []
         untraversed = deque()
@@ -404,6 +520,8 @@ class Geometry:
                 poly_nodes.append(poly_node)
                 for p in poly.points:
                     point_dict[repr(p)] = p
+
+        # Compute the bounds of the simulation volume
         points = np.array([p for p in point_dict.values()])
         min_x, max_x = min(points[:,0]), max(points[:,0])
         min_y, max_y = min(points[:,1]), max(points[:,1])
@@ -416,6 +534,7 @@ class Geometry:
         for i in [0, 1, 2]:
             lspaces.append((min_v[i], max_v[i], max_v[i]-min_v[i]+1))
 
+        # Construct the volume voxel and store boundaries as polygons
         volume_coord = (max_v + min_v) / 2.0 * voxel_scale
         volume_scale = (max_v - min_v+1) * voxel_scale
         self.volume = Voxel(volume_coord, volume_scale, vol=True)
@@ -426,6 +545,7 @@ class Geometry:
         volume_pnodes = [PolyNode(p, volume_node) for p in volume_faces]
         poly_nodes.extend(volume_pnodes)
 
+        # Iterate over all voxels and store polygons that itersect appropriately in the spatial data structure
         self.voxel_dict = dict()
         grid = np.meshgrid(np.linspace(*lspaces[0]), np.linspace(*lspaces[1]), np.linspace(*lspaces[2]))
         voxel_coords = (np.array([x,y,z]) for x, y, z in itertools.izip(grid[0].flatten(), grid[1].flatten(), grid[2].flatten()))
@@ -460,6 +580,11 @@ class Geometry:
         return voxel.exit_t(ray)
 
     def ray_trace(self, ray, all_intersections=False):
+        """
+        Compute the intersections of a ray with polygons in the volume
+        Uses information about which polygons intersect with a voxel
+            to reduce computation time
+        """
         intersections = dict()
         checked = dict()
         # Check if the ray is already in the volume
@@ -467,17 +592,11 @@ class Geometry:
             # Find the voxel containing the ray
             voxel_coord = np.floor(ray.p/self.voxel_scale + 0.5)
             voxel = Voxel(voxel_coord, self.voxel_scale)
-            #print 'Starts in volume', repr(voxel.coord)
             vxid = repr(voxel.coord) in self.voxel_dict
-            #print 'Voxel in dict', vxid
             if not vxid:
-                #print ray.p, ray.d
                 voxel.next_voxel(ray)
                 if not repr(voxel.coord) in self.voxel_dict:
                     return []
-                #print voxel.coord
-                #print self.volume.planes
-                #raise
         else:
             # Find the intersection with the volume
             if not self.volume.ray_intersects(ray):
@@ -489,21 +608,15 @@ class Geometry:
                 pint = ray.p+ray.d*entry_t
                 voxel_coord = np.floor(pint/self.voxel_scale + 0.5)
                 voxel = Voxel(voxel_coord, self.voxel_scale)
-                #print 'Starts outside volume', repr(voxel.coord)
                 vxid = repr(voxel.coord) in self.voxel_dict
-                #print 'Voxel in dict', vxid
                 if not vxid:
-                    #print ray.p, ray.d
                     voxel.next_voxel(ray)
                     if not repr(voxel.coord) in self.voxel_dict:
                         return []
-                    #print voxel.coord
-                    #print self.volume.planes
-                    #raise
 
+        # Iterate through voxels
         working_ray = Ray(ray.p.copy(), ray.d.copy())
         while voxel is not None:
-            #print 'Voxel:', voxel.coord
             # Get the polygons that intersect with the voxel
             poly_nodes = self.get_polygon_nodes(voxel)
             # Check for intersections with the polygon nodes
@@ -516,9 +629,11 @@ class Geometry:
                 checked[poly_node.uid] = poly_node
             if not all_intersections and len(intersections) > 0:
                 break
+            # Move to the next voxel
             voxel.next_voxel(working_ray)
             exit_plane, exit_t = voxel.exit(working_ray)
             working_ray.p = working_ray.p + working_ray.d*exit_t
+            # Quit if the voxel is not in the volume
             if (not self.volume.contains_point(working_ray.p)) or repr(voxel.coord) not in self.voxel_dict:
                 voxel = None
 
@@ -527,6 +642,9 @@ class Geometry:
         return intersections
 
     def get_containing_surface(self, ray, intersections=None, return_intersections=False):
+        """
+        Compute the surface that contains the ray
+        """
         if intersections is None:
             intersections = self.ray_trace(ray, all_intersections=True)
         n = len(intersections)
@@ -542,7 +660,6 @@ class Geometry:
             i = n-1 - i
             node = intersections[i][0].geo_node
             next_l = node.level
-            #print 'level',next_l
             mod = False
             if next_l > last:
                 current += 1
@@ -560,13 +677,15 @@ class Geometry:
                 current -= 1
                 geo_nodes.pop()
                 mod = False
-        #print 'level', geo_nodes[-1].level
         if return_intersections:
             return geo_nodes[-1], intersections
         else:
             return geo_nodes[-1]
 
 def rotate(v, euler_angles):
+    """
+    Rotate a vector according to euler angles
+    """
     s1, s2, s3 = np.sin(euler_angles)
     c1, c2, c3 = np.cos(euler_angles)
     M = [
@@ -577,6 +696,10 @@ def rotate(v, euler_angles):
     return np.dot(M, v)
 
 def deflect_vector(v, theta, phi):
+    """
+    Deflect a vector by a polar and azimuthal angle
+    Uses an arbitrary coordinate system to specify the phi=0 angle
+    """
     unit_vecs = get_local_plane_coordinate_system(v)
     local_vector = np.dot(unit_vecs, v)
     local_vector = local_vector / np.linalg.norm(local_vector)
@@ -587,6 +710,10 @@ def deflect_vector(v, theta, phi):
     return v1
 
 def get_projected_angles(v0, v1):
+    """
+    Decompose the angle between v0, v1 into two parts
+    Uses an arbitrary coordinate system to do the decomposition
+    """
     unit_vecs = get_local_plane_coordinate_system(v0)
     local_vector = np.dot(unit_vecs, v1)
     thetax = np.arcsin(local_vector[0]/np.sqrt(local_vector[0]**2+local_vector[2]**2))
@@ -594,6 +721,9 @@ def get_projected_angles(v0, v1):
     return thetax, thetay
 
 def regular_prism_surface(r=1., l=1., n=6, center=np.array([0,0,0]), rotation=None):
+    """
+    Construct prism with a regular polygon cross section
+    """
     if rotation is None:
         rot = lambda x, a: x
     else:
@@ -616,7 +746,9 @@ def regular_prism_surface(r=1., l=1., n=6, center=np.array([0,0,0]), rotation=No
     return surface
 
 def hex_surface(r=1., l=1.):
-    # Construct hexagonal prism geometry
+    """
+    Construct a hexagonal prism
+    """
     r32 = np.sqrt(3.0)/2.0
     hex_points = np.array([
         [1,0,0],
