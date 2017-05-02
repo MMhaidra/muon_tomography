@@ -479,16 +479,19 @@ class GeometryNode:
     Class for hierarchically organizing surfaces in the geomtry
     as well as specifying the properties of the volume within that surface
     """
-    def __init__(self, surface, properties=None, parent=None, children=[]):
+    def __init__(self, surface, properties=None, name='', parent=None):
+        self.name = name
         self.surface = surface
         self.properties = properties
         self.uid = uuid.uuid4()
         self.parent = parent
+        if parent is not None:
+            parent.add_child(self)
+        self.children = []
         self.level = 0
-        self.children = children
-    def add_child(self, child):
-        self.children.append(child)
-        child.parent = self
+    def add_child(self, c):
+        c.parent = self
+        self.children.append(c)
 
 class Geometry:
     """
@@ -505,19 +508,23 @@ class Geometry:
 
         # Traverse geometry nodes to collect polygons
         point_dict = dict()
-        poly_nodes = []
+        self.poly_nodes = []
+        traversed = set()
         untraversed = deque()
         untraversed.extend(root_nodes)
         while len(untraversed) > 0:
             next_node = untraversed.popleft()
             self.nodes.append(next_node)
-            if next_node.children is not None:
-                for child in next_node.children:
+            for child in next_node.children:
+                if child.uid in traversed:
+                    pass
+                else:
                     child.level = next_node.level + 1
-                untraversed.extend(next_node.children)
+                    untraversed.append(child)
+                    traversed.add(child.uid)
             for poly in next_node.surface.polygons:
                 poly_node = PolyNode(poly, next_node)
-                poly_nodes.append(poly_node)
+                self.poly_nodes.append(poly_node)
                 for p in poly.points:
                     point_dict[repr(p)] = p
 
@@ -543,7 +550,7 @@ class Geometry:
         volume_node = GeometryNode(volume_surface, self.default_properties)
         volume_node.level = -1
         volume_pnodes = [PolyNode(p, volume_node) for p in volume_faces]
-        poly_nodes.extend(volume_pnodes)
+        self.poly_nodes.extend(volume_pnodes)
 
         # Iterate over all voxels and store polygons that itersect appropriately in the spatial data structure
         self.voxel_dict = dict()
@@ -560,7 +567,7 @@ class Geometry:
             for i in xrange(3):
                 mx[i][0] = min(mx[i][0], vc[i])
                 mx[i][1] = max(mx[i][1], vc[i])
-            for pn in poly_nodes:
+            for pn in self.poly_nodes:
                 if voxel.poly_intersects(pn.poly):
                     self.voxel_dict[k].append(pn)
 
@@ -695,11 +702,15 @@ def rotate(v, euler_angles):
         ]
     return np.dot(M, v)
 
-def deflect_vector(v, theta, phi):
+def deflect_vector(v, theta, phi, preserve_mag=False):
     """
     Deflect a vector by a polar and azimuthal angle
     Uses an arbitrary coordinate system to specify the phi=0 angle
     """
+    if preserve_mag:
+        mag = np.linalg.norm(v)
+    else:
+        mag = 1.0
     unit_vecs = get_local_plane_coordinate_system(v)
     local_vector = np.dot(unit_vecs, v)
     local_vector = local_vector / np.linalg.norm(local_vector)
@@ -707,7 +718,7 @@ def deflect_vector(v, theta, phi):
     local_vector = local_vector / np.linalg.norm(local_vector)
     v1 = np.dot(unit_vecs.T, local_vector)
     v1 = v1 / np.linalg.norm(v1)
-    return v1
+    return v1*mag
 
 def get_projected_angles(v0, v1):
     """
