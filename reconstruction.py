@@ -103,20 +103,18 @@ def get_data(fname, scale, max_p, min_p):
                 actual_hits.extend([(vc, entries[0]), (vc, entries[1])])
     return actual_hits
 
-def run_reco(n=0):
+def run_reco(files='./*.pkl', output='./reco_out.pkl'):
     data_dict = {}
     i = 0
-    for fname in glob.glob('./pkl/'+str(n)+'/*.pkl'):
+    for fname in glob.glob(files):
         hits = get_data(fname, 0.05, np.array([2,2,2]), np.array([-2,-2,-2]))
         for h in hits:
-            if h[1] < 1e-6:
-                continue
             if not h[0] in data_dict:
                 data_dict[h[0]] = []
             data_dict[h[0]].append(h[1])
         print i
         i += 1
 
-    f = open('./reco/'+str(n)+'.pkl', 'wb')
+    f = open(output, 'wb')
     pickle.dump(data_dict, f)
     f.close()

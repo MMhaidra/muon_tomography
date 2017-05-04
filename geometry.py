@@ -2,6 +2,7 @@ import numpy as np
 from collections import Counter
 from matplotlib import pyplot as plt
 from matplotlib import collections as mc
+import matplotlib.path
 import uuid
 from collections import deque
 import itertools
@@ -35,6 +36,9 @@ class Plane:
         self.point = point
         self.vector = vector / np.linalg.norm(vector)
         self.unit_vecs = get_local_plane_coordinate_system(self.vector)
+        self.p0 = self.point + self.unit_vecs[0]
+        self.p1 = self.point + self.unit_vecs[1]
+        self.p2 = self.point
 
     def __eq__(self, other):
         if (self.point != other.point).any():
@@ -57,6 +61,27 @@ class Plane:
         return p + self.vector * self.distance(p)
 
     def ray_intersection(self, ray):
+        new_int = self.new_ray_intersection(ray)
+        old_int = self.old_ray_intersection(ray)
+        if np.any(new_int != old_int) and np.any(abs(new_int - old_int)/abs(new_int) > 1e-5):
+            print 'new_int', new_int
+            print 'old_int', old_int
+            raise ValueError('Ray intersection does not match')
+        return new_int
+
+    def new_ray_intersection(self, ray):
+        M = np.array([
+                [-ray.d[0], self.unit_vecs[0][0], self.unit_vecs[1][0]],
+                [-ray.d[1], self.unit_vecs[0][1], self.unit_vecs[1][1]],
+                [-ray.d[2], self.unit_vecs[0][2], self.unit_vecs[1][2]],
+            ])
+        if np.linalg.det(M) == 0:
+            return None
+        vv = ray.p - self.point
+        t, u, v = np.dot(np.linalg.inv(M), vv)
+        return ray.p + ray.d*t
+
+    def old_ray_intersection(self, ray):
         """
         Compute the intersection point of a ray with the plane
         """
@@ -153,6 +178,9 @@ class Polygon:
         for i in xrange(len(self.points)):
             self.edges.append(Edge(self.points[i], self.points[(i+1) % len(self.points)]))
 
+        local_points = [np.dot(self.plane.unit_vecs[:2],p) for p in self.points]
+        self.path = matplotlib.path.Path(local_points)
+
     def get_edges(self):
         return self.edges
 
@@ -195,7 +223,18 @@ class Polygon:
         Compute whether a point is inside a polygon or not
         A non zero winding number implies that the point is contained
         """
-        return self.winding_number(point) != 0
+        wn_contains = self.winding_number(point) != 0
+        #numpy_contains = self.path.contains_point(np.dot(self.plane.unit_vecs,point)[:2])
+        
+        #if wn_contains != numpy_contains:
+        #    print 'WN:', wn_contains
+        #    print 'NP:', numpy_contains
+        #    print 'points', self.points
+        #    print 'point', point
+        #    print 'path', self.path
+        #    print 'proj point', np.dot(self.plane.unit_vecs, point)[:2]
+        #    raise ValueError('Bad winding number result')
+        return wn_contains
 
     def ray_intersection(self, ray):
         """
@@ -550,6 +589,8 @@ class Geometry:
         volume_node = GeometryNode(volume_surface, self.default_properties)
         volume_node.level = -1
         volume_pnodes = [PolyNode(p, volume_node) for p in volume_faces]
+        for node in self.root_nodes:
+            volume_node.add_child(node)
         self.poly_nodes.extend(volume_pnodes)
 
         # Iterate over all voxels and store polygons that itersect appropriately in the spatial data structure
@@ -587,6 +628,22 @@ class Geometry:
         return voxel.exit_t(ray)
 
     def ray_trace(self, ray, all_intersections=False):
+        checked = dict()
+        intersections = dict()
+        for poly_node in self.poly_nodes:
+            if poly_node.uid in checked:
+                continue
+            pint = poly_node.poly.ray_intersection(ray)
+            if pint is not None:
+                intersections[poly_node.uid] = (poly_node, pint)
+            checked[poly_node.uid] = poly_node
+        
+        intersections = [(pn, pint, np.dot(pint - ray.p, ray.d)) for pn, pint in intersections.values()]
+        intersections = [(pn, pint, d) for pn, pint,d in intersections if d>=0]
+        intersections = sorted(intersections, key=lambda x: x[2])
+        return intersections
+
+    def bad_ray_trace(self, ray, all_intersections=False):
         """
         Compute the intersections of a ray with polygons in the volume
         Uses information about which polygons intersect with a voxel
@@ -657,6 +714,7 @@ class Geometry:
         n = len(intersections)
         if not self.volume.contains_point(ray.p) or n == 0:
             if return_intersections:
+                print 'Setting node to None'
                 return None, intersections
             else:
                 return None
