@@ -639,8 +639,9 @@ class Geometry:
             checked[poly_node.uid] = poly_node
         
         intersections = [(pn, pint, np.dot(pint - ray.p, ray.d)) for pn, pint in intersections.values()]
-        intersections = [(pn, pint, d) for pn, pint,d in intersections if d>=0]
+        intersections = [(pn, pint, d) for pn, pint, d in intersections if d>=0]
         intersections = sorted(intersections, key=lambda x: x[2])
+        intersections = [(pn, pint) for pn, pint, d in intersections]
         return intersections
 
     def bad_ray_trace(self, ray, all_intersections=False):

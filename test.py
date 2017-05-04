@@ -107,9 +107,9 @@ def test_detection(n = 1):
     logs = []
     maxZs = []
     for i in xrange(n):
-        if i%1000 == 0:
-            print i
-            print collections.Counter(maxZs)
+        #if i%1000 == 0:
+        print i
+        print collections.Counter(maxZs)
         phi = 2*np.pi*np.random.uniform()
         theta = np.arccos(1.-2.*np.random.uniform())
         position = geo.deflect_vector(np.array([3.,3.,3.1]), theta, phi, preserve_mag=True)

@@ -91,17 +91,18 @@ class Track:
         #self.intersections = []
         #self.update()
     def go_to_interface(self):
-        print 'Go to interface'
+        #print 'Go to interface'
         self.intersections = self.geometry.ray_trace(self.ray)
         if len(self.intersections) > 0:
-            poly_node, pint, dint = self.intersections[0]
+            poly_node, pint = self.intersections[0]
+            dint = np.dot(pint - self.ray.p, self.ray.d)
             geo_node = poly_node.geo_node
-            print 'poly geo node:', geo_node
-            print 'current geo node:', self.geo_node
+            #print 'poly geo node:', geo_node
+            #print 'current geo node:', self.geo_node
                 
             current_level = self.get_current_level()
-            print 'Current level', current_level
-            print 'Next level', geo_node.level
+            #print 'Current level', current_level
+            #print 'Next level', geo_node.level
 
             going_in = geo_node.level > current_level
             going_out = geo_node.level == current_level
@@ -115,10 +116,10 @@ class Track:
                 print new_intersections
                 raise ValueError('Next geo level is larger than current geo level')
             elif going_in:
-                print 'Going in!'
+                #print 'Going in!'
                 self.next_geo_node = geo_node
             elif going_out:
-                print 'Going out!'
+                #print 'Going out!'
                 self.next_geo_node = geo_node.parent
 
             self.surface_exit_vector = np.dot(self.ray.d, poly_node.poly.plane.vector)*poly_node.poly.plane.vector
@@ -126,7 +127,7 @@ class Track:
 
             self.ray.p = pint
             self.intersections = self.geometry.ray_trace(self.ray)
-            if self.intersections[0][2] <= 0:
+            if np.dot(self.intersections[0][1] - self.ray.p, self.ray.d) <= 0:
                 self.intersections = self.intersections[1:]
             self.on_boundary = True
             self.boundary = poly_node
@@ -139,15 +140,16 @@ class Track:
         return 0
 
     def move_forward(self, t):
-        print 'Move forward', t
+        #print 'Move forward', t
         if self.on_boundary:
             self.on_boundary = False
             self.geo_node = self.next_geo_node
             self.next_geo_node = None
         if len(self.intersections):
-            poly_node, pint, geo_lim = self.intersections[0]
+            poly_node, pint = self.intersections[0]
+            geo_lim = np.dot(pint - self.ray.p, self.ray.d)
             if geo_lim < t:
-                print 'Only going', geo_lim
+                #print 'Only going', geo_lim
                 # Hit an interface!!!
                 return self.go_to_interface()
         self.ray.p += self.ray.d*t
@@ -156,7 +158,7 @@ class Track:
         return t
 
     def change_direction(self, theta, phi):
-        print 'Change direction'
+        #print 'Change direction'
         model_change = False
         v1 = geo.deflect_vector(self.ray.d, theta, phi)
         if self.on_boundary:
