@@ -706,48 +706,6 @@ class Geometry:
         intersections = sorted(intersections, key=lambda x: x[2])
         return intersections
 
-    def get_containing_surface(self, ray, intersections=None, return_intersections=False):
-        """
-        Compute the surface that contains the ray
-        """
-        if intersections is None:
-            intersections = self.ray_trace(ray, all_intersections=True)
-        n = len(intersections)
-        if not self.volume.contains_point(ray.p) or n == 0:
-            if return_intersections:
-                print 'Setting node to None'
-                return None, intersections
-            else:
-                return None
-        last = -2
-        geo_nodes = [None]
-        current = -2
-        for i in xrange(n):
-            i = n-1 - i
-            node = intersections[i][0].geo_node
-            next_l = node.level
-            mod = False
-            if next_l > last:
-                current += 1
-                geo_nodes.append(node)
-                mod = False
-            elif next_l == last:
-                if mod:
-                    current += 1
-                    geo_nodes.append(node)
-                else:
-                    current -= 1
-                    geo_nodes.pop()
-                mod = not mod
-            else:
-                current -= 1
-                geo_nodes.pop()
-                mod = False
-        if return_intersections:
-            return geo_nodes[-1], intersections
-        else:
-            return geo_nodes[-1]
-
 def rotate(v, euler_angles):
     """
     Rotate a vector according to euler angles

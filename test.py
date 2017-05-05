@@ -50,7 +50,7 @@ def test_propagation():
     track = tracking.Track(position, direction, mass, energy, g)
     #print track.ray.p, track.ray.d
 
-    prop = tracking.Propagator(track, detailed_logging=True)
+    prop = tracking.Propagator(track)
     while True:
         result = prop.propagate_step()
         #print track.ray.p, track.ray.d
@@ -100,87 +100,53 @@ def test_detection(n = 1):
         else:
             node = node.children[0]
 
-    sim_scale = np.array([11., 11., 11.])
+    sim_scale = np.array([12., 12., 12.])
     sim = np.array([0.,0.,0.])
     sim_v = geo.Voxel(sim, sim_scale, vol=True)
+
+    # Define energy spectrum parameters
+    gamma = -2.
+    E0 = 10.
+    E1 = 100.
 
     logs = []
     maxZs = []
     for i in xrange(n):
-        #if i%1000 == 0:
-        print i
-        print collections.Counter(maxZs)
+        if i%100 == 0:
+            print i
+            print collections.Counter(maxZs)
         phi = 2*np.pi*np.random.uniform()
         theta = np.arccos(1.-2.*np.random.uniform())
-        position = geo.deflect_vector(np.array([3.,3.,3.1]), theta, phi, preserve_mag=True)
-        print position, sim_v.contains_point(position), g.volume.contains_point(position)
+        position = geo.deflect_vector(np.array([0.,0.,5.5]), theta, phi, preserve_mag=True)
         direction = np.array([0,0,0]) - position
         direction = direction/np.linalg.norm(direction)
-        #print position, direction
-        #position, direction = (np.array([0, 0, -20]), np.array([0, 0, 1]))
         mass = tracking.muon_mass
-        n = -2.
-        E0 = 0.5
-        E1 = 100.
         y = np.random.uniform()
-        energy = ((E1**(n+1)-E0**(n+1))*y + E0**(n+1))**(1/(n+1))
+        energy = ((E1**(gamma+1)-E0**(gamma+1))*y + E0**(gamma+1))**(1/(gamma+1))
         track = tracking.Track(position, direction, mass, energy, g)
-        #print track.ray.p, track.ray.d
 
-        prop = tracking.Propagator(track, detailed_logging=True)
+        prop = tracking.Propagator(track)
         start = time.time()
         while True:
             try:
                 result = prop.propagate_step()
             except KeyboardInterrupt:
-                print prop.detailed_log
                 raise
-            #print track.ray.p, track.ray.d
             outside_sim_v = not sim_v.contains_point(prop.track.ray.p)
-            hit_detector = len(prop.detector_log) >= 2
+            hit_detector = len(track.detector_log) >= 2
             if outside_sim_v or hit_detector:
-                print 'hit:', hit_detector, ', outside:', outside_sim_v, ', point:', prop.track.ray.p
+                #print 'hit:', hit_detector, ', outside:', outside_sim_v, ', point:', prop.track.ray.p
+                #print track.detector_log
                 prop.finish()
                 break
         end = time.time()
         duration = end - start
-        log = prop.detector_log
-        if duration > 1 or len(log) == 1:
-            print 'Muon propagation took more than 1s!'
-            print 'Duration:', duration
-            print 'Maximum Z:', max(prop.material_log, key=lambda x: x[1])[1]
-            print 'Number of steps:', len(prop.detailed_log)
-            print 'Maximum r:', max(enumerate([np.linalg.norm(l[0]) for l in prop.detailed_log]), key=lambda x: x[1])
-            p0 = prop.detailed_log[0][0]
-            v0 = prop.detailed_log[0][1]
-            total_displacement = [np.linalg.norm(p-(p0 + np.dot(p-p0, v0)*v0)) for p,v in prop.detailed_log]
-            total_deflection = [np.arccos(np.dot(v0, v)) for p,v in prop.detailed_log]
-            deflection = [np.arccos(np.dot(pv1[1],pv2[1])) for pv1,pv2 in itertools.izip(prop.detailed_log[:-1], prop.detailed_log[1:])]
-            displacement = [np.linalg.norm(pv2[0]-(pv1[0] + np.dot(pv2[0]-pv1[0], pv1[1])*pv1[1])) for pv1,pv2 in itertools.izip(prop.detailed_log[:-1], prop.detailed_log[1:])]
-            print 'Maximum deflection:', max(deflection)
-            print 'Maximum displacement:', max(displacement)
-            print 'Maximum total_deflection:', max(total_deflection)
-            print 'Maximum total_displacement:', max(total_displacement)
-            if len(log) == 1:
-                print log
-                for l in prop.detailed_log:
-                    print l, sim_v.contains_point(l[0]), g.volume.contains_point(l[0])
-                raise ValueError('Only 1 hit')
-        if len(log) < 2:
-            print 'Min r:', min(enumerate([np.linalg.norm(l[0]) for l in prop.detailed_log]), key=lambda x: x[1])
-        if len(log) > 0:
-            #upper_l = [l for l in log if l[3] == 'upper']
-            #lower_l = [l for l in log if l[3] == 'lower']
-            #if len(upper_l) > 0 and len(lower_l) > 0:
-            if len(log) == 2:
-                #ul = min(upper_l, key=lambda x: np.linalg.norm(x[1]))
-                #ll = min(lower_l, key=lambda x: np.linalg.norm(x[1]))
-                #log = [[ul[0], ul[1], ul[2]], [ll[0], ll[1], ll[2]]]
-                log = [[log[0][0], log[0][1]], [log[1][0], log[1][1]]]
-                maxZ = max(prop.material_log, key=lambda x: x[1])[1]
-                maxZs.append(maxZ)
-                print log
-                logs.append(log)
+        log = track.detector_log
+        if len(log) == 2:
+            log = [[log[0][0], log[0][1]], [log[1][0], log[1][1]]]
+            maxZ = max(prop.material_log, key=lambda x: x[1])[1]
+            maxZs.append(maxZ)
+            logs.append(log)
     return logs, maxZs
 
 def run():

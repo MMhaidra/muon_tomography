@@ -36,7 +36,6 @@ def lambda2W(lambdaW, G2W):
     return lambdaW / G2W
 
 def lambdah(lambdaW, Cs, lambda1W):
-    #print 'setting lambdah'
     return max(lambdaW, Cs*lambda1W)
 
 def mu_cut(A, lambdah, lambdaW):
@@ -73,7 +72,7 @@ def mu_soft(mu_soft_mean, alpha):
         return 1.-comp*((1.-xi)/mu_soft_mean)**alpha
 
 class Track:
-    def __init__(self, position, direction, mass, energy, geometry, detailed_logging = False):
+    def __init__(self, position, direction, mass, energy, geometry):
         self.ray = geo.Ray(position, direction)
         self.mass = mass
         self.energy = energy
@@ -84,14 +83,13 @@ class Track:
         self.next_geo_node = None
         self.surface_exit_vector = None
         self.boundary = None
-        self.detailed_logging = detailed_logging
-        self.detailed_log = []
-        if self.detailed_logging:
-            self.detailed_log.append((self.ray.p.copy(), self.ray.d.copy(), self.get_current_level()))
         self.detector_log = []
         self.geo_node = self.get_containing_surface()
+
     def go_to_interface(self):
+        # Check that there is an interface to go to
         if len(self.intersections) > 0:
+            # Get the interface to move to
             poly_node, pint = self.intersections[0]
             dint = np.dot(pint - self.ray.p, self.ray.d)
             geo_node = poly_node.geo_node
@@ -103,7 +101,6 @@ class Track:
             nonsense = geo_node.level < current_level
 
             if nonsense:
-                print self.detailed_log
                 print pint
                 new_intersections = self.geometry.ray_trace(self.ray)
                 print self.intersections
@@ -114,43 +111,47 @@ class Track:
             elif going_out:
                 self.next_geo_node = geo_node.parent
 
+            # Store the exit vector
             self.surface_exit_vector = np.dot(self.ray.d, poly_node.poly.plane.vector)*poly_node.poly.plane.vector
             self.surface_exit_vector /= np.linalg.norm(self.surface_exit_vector)
 
+            # Update status information
             self.ray.p = pint
             self.intersections = self.intersections[1:]
             self.on_boundary = True
             self.boundary = poly_node
-
             self.last_geo_node = self.geo_node
             self.geo_node = None
+
+            # Log if the interface is part of a detector
             if 'det' in poly_node.geo_node.properties:
                 self.detector_log.append((self.ray.p.copy(), self.ray.d.copy()))
             return dint
         return 0
 
     def move_forward(self, t):
-        #print 'Move forward', t
         if self.on_boundary:
+            # Track is moving into the volume in front of it
             self.on_boundary = False
             self.geo_node = self.next_geo_node
             self.next_geo_node = None
+
         if len(self.intersections):
+            # Check if the track hits an interface
             poly_node, pint = self.intersections[0]
             geo_lim = np.dot(pint - self.ray.p, self.ray.d)
             if geo_lim < t:
-                #print 'Only going', geo_lim
                 # Hit an interface!!!
+                # Move the track to the interface instead of the full length
                 return self.go_to_interface()
         self.ray.p += self.ray.d*t
-        if self.detailed_logging:
-            self.detailed_log.append((self.ray.p.copy(), self.ray.d.copy(), self.get_current_level(), 'pos'))
         return t
 
     def change_direction(self, theta, phi):
         model_change = False
         v1 = geo.deflect_vector(self.ray.d, theta, phi)
         if self.on_boundary:
+            # If the track is on a boundary, update the next volume appropriately
             exit_component = np.dot(v1,self.surface_exit_vector)
             if exit_component < 0:
                 self.last_geo_node, self.next_geo_node = self.next_geo_node, self.last_geo_node
@@ -158,25 +159,29 @@ class Track:
                 model_change = True
             elif exit_component == 0:
                 # Oh god why
+                # The new direction is exactly in the plane of the polygon
                 # Instead of handling this properly we'll just add some rounding error
-                print 'Oh god why!'
                 v1 += self.surface_exit_vector * 1e-10 * (np.random.uniform()-0.5)
                 v1 /= np.linalg.norm(v1)
+
+        # Update the direction and intersections
         self.ray.d = v1
         self.intersections = self.geometry.ray_trace(self.ray, all_intersections=True)
         if self.on_boundary:
             if len(self.intersections) > 0 and self.intersections[0][0].uid == self.boundary.uid:
+                # Remove the first intersection if the track is on it
                 self.intersections = self.intersections[1:]
-        if self.detailed_logging:
-            self.detailed_log.append((self.ray.p.copy(), self.ray.d.copy(), self.get_current_level(), 'dir'))
         return model_change
 
     def get_containing_surface(self):
         if self.on_boundary:
+            # The volume the track cares about is the one it is going in to
             return self.next_geo_node
         else:
+            # Update the intersections if we need to
             if self.intersections is None:
                 self.intersections = self.geometry.ray_trace(self.ray)
+            # No intersections means the track is in empy space
             if len(self.intersections) == 0:
                 return None
             current_node = self.intersections[0][0].geo_node
@@ -188,11 +193,11 @@ class Track:
                 uid_map[uid].append(i)
             uid = current_node.uid
             n = len(uid_map[uid])
+            # An odd number of intersections means the track is inside the surface
             inside = n%2 == 1
             if not inside:
+                # An even number of intersections means the next surface is the child of the current volume
                 current_node = current_node.parent
-            if current_node is None:
-                return None
             return current_node
 
     def get_current_level(self):
@@ -202,43 +207,29 @@ class Track:
         else:
             return containing_surface.level
 
-    def get_current_level_old(self):
-        node = self.geo_node
-        if node is None:
-            node = self.next_geo_node
-        if node is None:
-            level = -2
-        else:
-            level = node.level
-        return level
-
     def get_material_properties(self):
-        if self.geo_node is None:
-            geo_node = self.next_geo_node
+        containing_surface = self.get_containing_surface()
+        if containing_surface is None:
+            return self.geometry.default_properties
         else:
-            geo_node = self.geo_node
-        if geo_node is None:
-            props = self.geometry.default_properties
-        else:
-            props = geo_node.properties
-        return props
+            return containing_surface.properties
 
 class Propagator:
-    def __init__(self, track, detailed_logging=False):
-        self.detailed_logging = detailed_logging
-        self.track = track
-        self.mass = track.mass
-        self.energy = track.energy
+    def __init__(self, track):
         self.Z = 0
         self.N = 0
         self.Cs = 0.05
+        self.reinit(track)
+
+    def reinit(self, track):
+        self.track = track
+        self.mass = track.mass
+        self.energy = track.energy
         self.step_log = []
         self.material_log = []
         self.energy_log = []
         self.detector_log = []
-        self.detailed_log = []
         self.update_model()
-        pass
 
     def update_model(self, material_update=True, energy_update=True):
         # Prerequisite to step 2: compute lambdah
@@ -274,30 +265,18 @@ class Propagator:
 
     def propagate_step(self):
         # 1: set the initial position and direction of the particle
-        p0 = self.track.ray.p.copy()
-        v0 = self.track.ray.d.copy()
-        if self.detailed_logging:
-            self.detailed_log.append((p0.copy(), v0.copy()))
-
-        #print 'Tracking step starts at:', p0, 'going', v0
 
         # Update the MSC model quantities is the energy has changed by 1% or more
         if 1-self.track.energy/self.energy >= 0.01:
             self.update_model(material_update=False, energy_update=True)
 
-        #print np.arccos(1-2*self.mu_cut)/np.pi, self.A, self.lambdah, self.lambdaW, self.sigmaW
-
         # 2: sample the length t of the step for the hard scatter using t=-lambdah*ln(xi)
         xi = np.random.random()
         self.t = -self.lambdah*np.log(xi)
 
-        #print 'Hard scatter after', self.t, 'm'
-
         # 3: advance the particle tau=t*xi
         xi = np.random.random()
         self.tau = self.t*xi
-        #print 'Soft scatter after', self.tau, 'm'
-        #p1 = p0 + v0*self.tau
         propagation_length = self.track.move_forward(self.tau)
         
         # 4: check if the track has crossed an interface
@@ -305,27 +284,6 @@ class Propagator:
             # Crossed an interface
             self.update_model(material_update=True)
             return
-        
-
-        """
-        # 4: check if the track has crossed an interface
-        #intersections = self.track.geometry.ray_trace(self.track.ray, all_intersections=False)
-        intersections = track.intersections
-        crossed = False
-        if len(intersections) > 0:
-            geo_lim = intersections[0][2]
-            if geo_lim <= self.tau:
-                # If the track crosses an interface, stop it at the interface
-                track.go_to_interface()
-                self.track.ray.p = p0 + v0*geo_lim
-                if 'det' in intersections[0][0].geo_node.properties:
-                    self.detector_log.append((self.track.energy, self.track.ray.p, self.track.ray.d, intersections[0][0].geo_node.properties['det']))
-                self.detailed_log.append((self.track.ray.p.copy(), self.track.ray.d.copy()))
-                self.track.update()
-                self.update_model(material_update=True, energy_update=False)
-                return not ((self.track.geo_node is None or self.track.geo_node.level >= -1) and len(self.track.intersections) == 0)
-        self.track.ray.p = p1
-        """
 
         # 5: simulate the soft scattering
         self.mu_soft_mean = mu_soft_mean(self.t, self.lambda1Ws)
@@ -336,32 +294,11 @@ class Propagator:
         self.theta_soft = np.arccos(1-2*self.mu_soft)
         xi = np.random.random()
         self.phi_soft = 2*np.pi*xi
-        #print 'soft', self.theta_soft, self.phi_soft
 
         model_update = self.track.change_direction(self.theta_soft, self.phi_soft)
         if model_update:
             self.update_model(material_update=True)
 
-        """
-        # Change direction of the vector
-        # Still need to implement
-        # Use euler angle rotation function in geometry class, and local coordinate system defined in Plane class
-        # alpha = phi, beta = theta
-        # z = direction of track
-        # x, y from the local "plane" coordinate system
-        # Step1: project onto new coordinate system
-        # Step2: perform rotation
-        # Step3: project back onto original coordinate system
-        v1 = geo.deflect_vector(v0, self.theta_soft, self.phi_soft)
-        self.track.ray.d = v1
-        self.detailed_log.append((self.track.ray.p.copy(), self.track.ray.d.copy()))
-        """
-
-        """
-        # 6: advance the particle by t-tau
-        #p2 = p1 + v1*(self.t - self.tau)
-        """
-        
         # 6: advance the particle by t-tau
         propagation_length = self.track.move_forward(self.t-self.tau)
         
@@ -370,49 +307,16 @@ class Propagator:
             # Crossed an interface
             self.update_model(material_update=True)
             return
-       
-        """
-        # 7: check if the track has crossed an interface
-        intersections = self.track.geometry.ray_trace(self.track.ray, all_intersections=False)
-        crossed = False
-        if len(intersections) > 0:
-            geo_lim = intersections[0][2]
-            if geo_lim <= (self.t - self.tau):
-                #print 'Hit the geometric limit before hard scatter', geo_lim, self.t-self.tau
-                # If the track crosses an interface, stop it at the interface
-                #print 'Moving track to boundary before hard scatter'
-                self.track.ray.p = p1 + v1*geo_lim
-                if 'det' in intersections[0][0].geo_node.properties:
-                    self.detector_log.append((self.track.energy, self.track.ray.p, self.track.ray.d, intersections[0][0].geo_node.properties['det']))
-                self.detailed_log.append((self.track.ray.p.copy(), self.track.ray.d.copy()))
-                #print 'Updating track'
-                self.track.update()
-                #print 'Updating model'
-                self.update_model(material_update=True, energy_update=False)
-                #print 'Returning'
-                #return self.track.geo_node is not None and self.track.geo_node.level >= -1
-                return not ((self.track.geo_node is None or self.track.geo_node.level >= -1) and len(self.track.intersections) == 0)
-        self.track.ray.p = p2
-        """
 
         # 8: simulate a hard scatter
         self.mu_hard = mu_hard(self.A, self.mu_cut)
         self.theta_hard = np.arccos(1-2*self.mu_hard)
         xi = np.random.random()
         self.phi_hard = 2*np.pi*xi
-        #print 'hard', self.theta_hard, self.phi_hard
 
         model_update = self.track.change_direction(self.theta_hard, self.phi_hard)
         if model_update:
             self.update_model(material_update=True)
-        
-        """
-        # Change the direction of the vector
-        v2 = geo.deflect_vector(v1, self.theta_hard, self.phi_hard)
-        self.track.ray.d = v2
-        self.detailed_log.append((self.track.ray.p.copy(), self.track.ray.d.copy()))
-        return True
-        """
+
     def finish(self):
-        if self.detailed_logging:
-            self.detailed_log.append((self.track.ray.p.copy(), self.track.ray.d.copy()))
+        pass
