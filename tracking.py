@@ -73,36 +73,30 @@ def mu_soft(mu_soft_mean, alpha):
         return 1.-comp*((1.-xi)/mu_soft_mean)**alpha
 
 class Track:
-    def __init__(self, position, direction, mass, energy, geometry, detailed_logging = True):
+    def __init__(self, position, direction, mass, energy, geometry, detailed_logging = False):
         self.ray = geo.Ray(position, direction)
         self.mass = mass
         self.energy = energy
-        self.geo_node, self.intersections = geometry.get_containing_surface(self.ray, return_intersections=True)
-        self.geometry = geometry
+        self.intersections = None
         self.on_boundary = False
+        self.geometry = geometry
         self.last_geo_node = None
         self.next_geo_node = None
         self.surface_exit_vector = None
         self.boundary = None
         self.detailed_logging = detailed_logging
         self.detailed_log = []
-        self.detailed_log.append((self.ray.p.copy(), self.ray.d.copy(), self.get_current_level()))
+        if self.detailed_logging:
+            self.detailed_log.append((self.ray.p.copy(), self.ray.d.copy(), self.get_current_level()))
         self.detector_log = []
-        #self.intersections = []
-        #self.update()
+        self.geo_node = self.get_containing_surface()
     def go_to_interface(self):
-        #print 'Go to interface'
-        self.intersections = self.geometry.ray_trace(self.ray)
         if len(self.intersections) > 0:
             poly_node, pint = self.intersections[0]
             dint = np.dot(pint - self.ray.p, self.ray.d)
             geo_node = poly_node.geo_node
-            #print 'poly geo node:', geo_node
-            #print 'current geo node:', self.geo_node
                 
             current_level = self.get_current_level()
-            #print 'Current level', current_level
-            #print 'Next level', geo_node.level
 
             going_in = geo_node.level > current_level
             going_out = geo_node.level == current_level
@@ -116,19 +110,15 @@ class Track:
                 print new_intersections
                 raise ValueError('Next geo level is larger than current geo level')
             elif going_in:
-                #print 'Going in!'
                 self.next_geo_node = geo_node
             elif going_out:
-                #print 'Going out!'
                 self.next_geo_node = geo_node.parent
 
             self.surface_exit_vector = np.dot(self.ray.d, poly_node.poly.plane.vector)*poly_node.poly.plane.vector
             self.surface_exit_vector /= np.linalg.norm(self.surface_exit_vector)
 
             self.ray.p = pint
-            self.intersections = self.geometry.ray_trace(self.ray)
-            if np.dot(self.intersections[0][1] - self.ray.p, self.ray.d) <= 0:
-                self.intersections = self.intersections[1:]
+            self.intersections = self.intersections[1:]
             self.on_boundary = True
             self.boundary = poly_node
 
@@ -158,7 +148,6 @@ class Track:
         return t
 
     def change_direction(self, theta, phi):
-        #print 'Change direction'
         model_change = False
         v1 = geo.deflect_vector(self.ray.d, theta, phi)
         if self.on_boundary:
@@ -170,6 +159,7 @@ class Track:
             elif exit_component == 0:
                 # Oh god why
                 # Instead of handling this properly we'll just add some rounding error
+                print 'Oh god why!'
                 v1 += self.surface_exit_vector * 1e-10 * (np.random.uniform()-0.5)
                 v1 /= np.linalg.norm(v1)
         self.ray.d = v1
@@ -181,13 +171,14 @@ class Track:
             self.detailed_log.append((self.ray.p.copy(), self.ray.d.copy(), self.get_current_level(), 'dir'))
         return model_change
 
-    def get_current_level(self):
+    def get_containing_surface(self):
         if self.on_boundary:
-            return self.next_geo_node.level
+            return self.next_geo_node
         else:
-            self.intersections = self.geometry.ray_trace(self.ray)
+            if self.intersections is None:
+                self.intersections = self.geometry.ray_trace(self.ray)
             if len(self.intersections) == 0:
-                return -2
+                return None
             current_node = self.intersections[0][0].geo_node
             uid_map = dict()
             for i in self.intersections:
@@ -201,8 +192,15 @@ class Track:
             if not inside:
                 current_node = current_node.parent
             if current_node is None:
-                return -2
+                return None
+            return current_node
 
+    def get_current_level(self):
+        containing_surface = self.get_containing_surface()
+        if containing_surface is None:
+            return -1
+        else:
+            return containing_surface.level
 
     def get_current_level_old(self):
         node = self.geo_node
