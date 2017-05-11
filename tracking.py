@@ -102,7 +102,7 @@ class Track:
 
             if nonsense:
                 print pint
-                new_intersections = self.geometry.ray_trace(self.ray)
+                new_intersections = self.geometry.ray_trace(self.ray, all_intersections=True)
                 print self.intersections
                 print new_intersections
                 raise ValueError('Next geo level is larger than current geo level')
@@ -125,7 +125,7 @@ class Track:
 
             # Log if the interface is part of a detector
             if 'det' in poly_node.geo_node.properties:
-                self.detector_log.append((self.ray.p.copy(), self.ray.d.copy()))
+                self.detector_log.append((self.energy, self.ray.p.copy(), self.ray.d.copy()))
             return dint
         return 0
 
@@ -180,7 +180,7 @@ class Track:
         else:
             # Update the intersections if we need to
             if self.intersections is None:
-                self.intersections = self.geometry.ray_trace(self.ray)
+                self.intersections = self.geometry.ray_trace(self.ray, all_intersections=True)
             # No intersections means the track is in empy space
             if len(self.intersections) == 0:
                 return None

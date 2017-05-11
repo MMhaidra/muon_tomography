@@ -120,6 +120,9 @@ def test_detection(n = 1):
         position = geo.deflect_vector(np.array([0.,0.,5.5]), theta, phi, preserve_mag=True)
         direction = np.array([0,0,0]) - position
         direction = direction/np.linalg.norm(direction)
+        phi = 2*np.pi*np.random.uniform()
+        theta = np.arccos(1.-0.03*np.random.uniform())
+        direction = geo.deflect_vector(direction, theta, phi, preserve_mag=False)
         mass = tracking.muon_mass
         y = np.random.uniform()
         energy = ((E1**(gamma+1)-E0**(gamma+1))*y + E0**(gamma+1))**(1/(gamma+1))
@@ -143,7 +146,7 @@ def test_detection(n = 1):
         duration = end - start
         log = track.detector_log
         if len(log) == 2:
-            log = [[log[0][0], log[0][1]], [log[1][0], log[1][1]]]
+            #log = [[log[0][0], log[0][1]], [log[1][0], log[1][1]]]
             maxZ = max(prop.material_log, key=lambda x: x[1])[1]
             maxZs.append(maxZ)
             logs.append(log)
@@ -153,15 +156,14 @@ def run():
     uid = str(uuid.uuid4())
     i = 0
     while True:
-        logs, maxZs = test_detection(100000)
+        logs, maxZs = test_detection(2000)
         print 'Done with', i
-        f = open(uid+'_'+str(i)+'.pkl', 'wb')
+        f = open('./pkl/'+uid+'_'+str(i)+'.pkl', 'wb')
         pickle.dump(logs, f)
         f.close()
-        print logs
+        #print logs
         del logs
         i = i + 1
-        break
 
 #test_surface()
 #test_geo()

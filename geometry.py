@@ -62,11 +62,11 @@ class Plane:
 
     def ray_intersection(self, ray):
         new_int = self.new_ray_intersection(ray)
-        old_int = self.old_ray_intersection(ray)
-        if np.any(new_int != old_int) and np.any(abs(new_int - old_int)/abs(new_int) > 1e-5):
-            print 'new_int', new_int
-            print 'old_int', old_int
-            raise ValueError('Ray intersection does not match')
+        #old_int = self.old_ray_intersection(ray)
+        #if np.any(new_int != old_int) and np.any(abs(new_int - old_int)/abs(new_int) > 1e-5):
+        #    print 'new_int', new_int
+        #    print 'old_int', old_int
+        #    raise ValueError('Ray intersection does not match')
         return new_int
 
     def new_ray_intersection(self, ray):
@@ -121,6 +121,21 @@ def is_left(p0, p1, p2, normal=None):
     if normal is None:
         center, normal = fit_plane(np.array([p0, p1, p2]))
     return np.dot(np.cross(p1 - p0, p2 - p1), normal)
+
+def ray_edge_intersection(ray, edge_p0, p1=None):
+    if p1 is None:
+        p0, p1 = edge_p0.p0, edge_p0.p1
+    else:
+        p0 = edge_p0
+    a = ray.v
+    b = p1 - p0
+    c = p0 - ray.p
+    s = np.dot(np.cross(c,b), np.cross(a,b))/np.linalg.norm(np.cross(a,b))**2.0
+    t = np.dot(np.cross(-c,a), np.cross(b,a))/np.linalg.norm(np.cross(b,a))**2.0
+    if t > 1:
+        return None
+    else:
+        return s
 
 class Edge:
     """
@@ -245,6 +260,59 @@ class Polygon:
             return pint
         else:
             return None
+    
+    def polygon_intersects(self, poly):
+        n1 = self.plane.vector
+        n2 = poly.plane.vector
+        
+        if 1. - np.dot(n1, n1) <= 1e-5:
+            # Planes are basically parallel
+            if np.linalg.norm(self.plane.project(poly.plane.point) - poly.plane.point) <= 1e-5:
+                for p in poly.points:
+                    if self.contains(p):
+                        return True
+                for p in self.points:
+                    if poly.contains(p):
+                        return True
+                # Planes are the ~same
+                # Need a clipping algorithm
+                # Not going to implement that
+                #raise ValueError('Planes of these polygons are the same!')
+            return False
+        # Planes are not parallel
+        # Find the line of intersection between them
+        a = np.cross(n1, n2) # Direction of the line
+        d = max(enumerate(a), key=lambda x: x[1])[0]
+        d0 = (d+1)%3
+        d1 = (d+2)%3
+        p1 = -np.dot(n1, self.plane.point)
+        p2 = -np.dot(n2, poly.plane.point)
+        x0 = (n2[d1]*p1-n1[d1]*p2)/(n1[d1]*n2[d0]-n1[d0]*n2[d1])
+        x1 = -(n2[d0]*p1-n1[d0]*p2)/(n1[d1]*n2[d0]-n1[d0]*n2[d1])
+        x = np.zeros() # Point on the line
+        x[d0] = x0
+        x[d1] = x1
+        ray = Ray(x, a)
+        p1 = ray.pca_to_point(self.plane.point)
+        p2 = ray.pca_to_point(poly.plane.point)
+        ray.p = (p1+p2)/2
+
+        # Now we have to find points on the line that intersect with the polygon
+        plane1_s = [(s, 1) for s in [ray_edge_intersection(ray, e) for e in self.edges] if s is not None]
+        print plane1_s
+        if len(plane1_s) == 0:
+            return False
+        plane2_s = [(s, 2) for s in [ray_edge_intersection(ray, e) for e in poly.edges] if s is not None]
+        print plane2_s
+        if len(plane2_s) == 0:
+            return False
+        s_points = sorted(plane1_s + plane2_s, key=lambda x: x[0])
+        print s_points
+        for i in xrange(len(s_points)-2):
+            if s_points[i][0] == s_points[i+2][0] and s_points[i][0] != s_points[i+1][0]:
+                # There is an overlap between the polygons
+                return True
+        return False
 
 class Surface:
     """
@@ -324,6 +392,7 @@ class Voxel:
         self.min_planes = self.center - self.half_scale
         self.max_planes = self.center + self.half_scale
         self.planes = [self.min_planes, self.max_planes]
+        self.faces = None
 
     def contains_point(self, point, include_boundaries=True, tol=1e-6):
         """
@@ -352,6 +421,8 @@ class Voxel:
         """
         Return polygon objects that represent the rectangular faces of the voxel
         """
+        if self.faces is not None:
+            return self.faces
         faces = []
         for d in xrange(3):
             for m in [0, 1]:
@@ -372,7 +443,8 @@ class Voxel:
                 plane = Plane(center, vector)
                 face = Polygon(plane, corners)
                 faces.append(face)
-        return faces
+        self.faces = faces
+        return self.faces
 
     def in_voxel(self, voxel, count_edge_contact=False):
         """
@@ -420,14 +492,49 @@ class Voxel:
         return (unit_vecs[d] * (minmax*2 - 1), t)
 
     def entry(self, ray):
+        #new_e = self.new_entry(ray)
+        old_e = self.old_entry(ray)
+        """
+        if np.any(new_e[0] != old_e[0]) or abs(new_e[1] - old_e[1])/abs(new_e[1]) > 1e-5:
+            print ray.p, ray.d
+            print self.vol
+            if not self.vol:
+                print self.coord
+            print self.center
+            print self.scale
+            print 'new_e', new_e
+            print 'old_e', old_e
+            raise ValueError('Voxel entry does not match')
+        """
+        return old_e
+
+    def new_entry(self, ray):
+        faces = self.get_faces()
+        t_infos = []
+        for i, face in enumerate(faces):
+            pint = face.ray_intersection(ray)
+            if pint is None:
+                t = np.inf
+            else:
+                t = np.dot(pint - ray.p, ray.d)
+            t_infos.append((t, pint, face))
+        t, pint, face = min(t_infos, key=lambda x: x[0])
+        direction = face.plane.point - self.center
+        direction = direction / np.linalg.norm(direction)
+        return (direction, t)
+
+    def old_entry(self, ray):
         """
         Compute the distance to a ray's entry to the voxel and the plane through which it will enter
         """
         t_infos = []
         for d in xrange(3):
-            t0 = self.plane_t(d, ray, minmax=0)
-            t1 = self.plane_t(d, ray, minmax=1)
-            minmax, t = min(enumerate([t0, t1]), key=lambda x: x[1])
+            t0 = (0, self.plane_t(d, ray, minmax=0))
+            t1 = (1, self.plane_t(d, ray, minmax=1))
+            tt = [t for t in [t0,t1] if t[1] >=  0]
+            if len(tt) == 0:
+                continue
+            minmax, t = min(tt, key=lambda x: x[1])
             t_infos.append((t, d, minmax))
         t, d, minmax = min(t_infos, key=lambda x: x[0])
         return (unit_vecs[d] * (minmax*2 - 1), t)
@@ -461,6 +568,22 @@ class Voxel:
         return self.contains_point(p, include_boundaries=True, tol=1e-6)
 
     def poly_intersects(self, polygon):
+        return self.old_poly_intersects(polygon) or self.alt_poly_intersects(polygon)
+
+    def alt_poly_intersects(self, polygon):
+        # Return True is any polygon points are in the voxel
+        r = max(self.scale) / 2. * np.sqrt(3.)
+        for p in polygon.points:
+            if np.linalg.norm(self.center - p) <= r:
+                return True
+        
+        faces = self.get_faces()
+        for face in faces:
+            if face.polygon_intersects(polygon):
+                return True
+        return False
+
+    def old_poly_intersects(self, polygon):
         """
         Check if a polygon intersects with the voxel
         """
@@ -471,8 +594,9 @@ class Voxel:
 
         # If the projection of the voxel center onto the plane of the polygon is not inside the voxel,
         # then no point on the polygon is inside the voxel
-        if not self.contains_point(polygon.plane.project(self.center)):
-            return False
+        # I'm pretty sure the above statement is wrong! This might be the issue in the ray tracing algorithm
+        #if not self.contains_point(polygon.plane.project(self.center)):
+        #    return False
 
         n = polygon.plane.vector
         x0 = polygon.plane.point
@@ -501,6 +625,18 @@ class Voxel:
                 if np.linalg.norm(pint - p0) <= self.half_scale[d]: # check if the point is in the voxel
                     if polygon.contains(pint): # check if the point is in the polygon
                         return True
+
+        # Find the intersection of polygon edges with the voxel planes
+        # Need to do
+        for face in self.get_faces():
+            for edge in polygon.edges:
+                v = edge.p1-edge.p0
+                v = v/np.linalg.norm(v)
+                pint = face.ray_intersection(Ray(edge.p0, v))
+                if pint is not None:
+                    if np.dot(pint - edge.p0, pint - edge.p1) <= 0:
+                        return True
+
         return False
 
 class PolyNode:
@@ -593,7 +729,8 @@ class Geometry:
             volume_node.add_child(node)
         self.poly_nodes.extend(volume_pnodes)
 
-        # Iterate over all voxels and store polygons that itersect appropriately in the spatial data structure
+        """
+        # Iterate over all voxels and store polygons that intersect appropriately in the spatial data structure
         self.voxel_dict = dict()
         grid = np.meshgrid(np.linspace(*lspaces[0]), np.linspace(*lspaces[1]), np.linspace(*lspaces[2]))
         voxel_coords = (np.array([x,y,z]) for x, y, z in itertools.izip(grid[0].flatten(), grid[1].flatten(), grid[2].flatten()))
@@ -611,6 +748,7 @@ class Geometry:
             for pn in self.poly_nodes:
                 if voxel.poly_intersects(pn.poly):
                     self.voxel_dict[k].append(pn)
+        """
 
     def get_polygon_nodes(self, voxel):
         if np.all(voxel.scale == self.voxel_scale):
@@ -628,6 +766,22 @@ class Geometry:
         return voxel.exit_t(ray)
 
     def ray_trace(self, ray, all_intersections=False):
+        new_int = self.new_ray_trace(ray, all_intersections)
+        #old_int = self.old_ray_trace(ray, all_intersections)
+        #if len(new_int) != len(old_int) or np.any([tpn.uid != pn.uid for ((tpn, tpint), (pn, pint)) in itertools.izip(new_int, old_int)]):
+        #    print ray.p, ray.d
+        #    print self.poly_nodes
+        #    print self.voxel_dict
+        #    print 'True intersections:'
+        #    for pn, pint in new_int:
+        #        print pn, pint, pn.poly.ray_intersection(ray)
+        #    print 'Found intersections'
+        #    for pn, pint in old_int:
+        #        print pn, pint, pn.poly.ray_intersection(ray)
+        #    raise ValueError('Intersections do not match')
+        return new_int
+
+    def new_ray_trace(self, ray, all_intersections=False):
         checked = dict()
         intersections = dict()
         for poly_node in self.poly_nodes:
@@ -644,7 +798,7 @@ class Geometry:
         intersections = [(pn, pint) for pn, pint, d in intersections]
         return intersections
 
-    def bad_ray_trace(self, ray, all_intersections=False):
+    def old_ray_trace(self, ray, all_intersections=False):
         """
         Compute the intersections of a ray with polygons in the volume
         Uses information about which polygons intersect with a voxel
@@ -702,8 +856,10 @@ class Geometry:
             if (not self.volume.contains_point(working_ray.p)) or repr(voxel.coord) not in self.voxel_dict:
                 voxel = None
 
-        intersections = [(pn, pint, np.linalg.norm(pint - ray.p)) for pn, pint in intersections.values()]
+        intersections = [(pn, pint, np.dot(pint - ray.p, ray.d)) for pn, pint in intersections.values()]
+        intersections = [(pn, pint, d) for pn, pint, d in intersections if d>=0]
         intersections = sorted(intersections, key=lambda x: x[2])
+        intersections = [(pn, pint) for pn, pint, d in intersections]
         return intersections
 
 def rotate(v, euler_angles):
